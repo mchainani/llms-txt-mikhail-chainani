@@ -185,14 +185,14 @@ describe('request workflow', () => {
     });
   });
 
-  it.each(['', '1', '500'])('submits maximum pages %j with a default of 250', async (limit) => {
+  it.each(['', '1', '500'])('submits maximum pages %j with a default of 50', async (limit) => {
     const fetcher = serve();
     const user = userEvent.setup();
     open();
     await user.click(screen.getByRole('button', { name: 'New request' }));
     await user.type(screen.getByLabelText('Website URL'), 'https://example.com/');
     const input = screen.getByLabelText(/Maximum pages/);
-    expect(input).toHaveAttribute('placeholder', '250');
+    expect(input).toHaveAttribute('placeholder', '50');
     if (limit) { await user.type(input, limit); }
     await user.click(screen.getByRole('button', { name: 'Create request' }));
     expect(await screen.findByRole('heading', { name: 'Request runs' })).toBeInTheDocument();

@@ -18,7 +18,7 @@ class FetchPageRequest(BaseModel):
         default=None,
         gt=0,
         strict=True,
-        description="Maximum unique links in the crawl result. Omit or pass null to use 250.",
+        description="Maximum unique links in the crawl result. Omit or pass null to use 50.",
     )
     fetch_timeout_seconds: float | None = Field(
         default=None,

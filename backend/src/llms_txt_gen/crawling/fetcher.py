@@ -29,7 +29,7 @@ from llms_txt_gen.urls import normalize_url
 
 FETCH_TIMEOUT_SECONDS = float(os.environ.get("FETCH_TIMEOUT_SECONDS", "600"))
 CRAWL_CONCURRENCY = int(os.environ.get("CRAWL_CONCURRENCY", "25"))
-DEFAULT_MAX_PAGES = 250
+DEFAULT_MAX_PAGES = 50
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +60,10 @@ async def _crawl_page(
         timeout_seconds = FETCH_TIMEOUT_SECONDS
     deadline_at = asyncio.get_running_loop().time() + timeout_seconds
     results: dict[str, PageResult] = {}
+    # Pending includes reserved, queued, and in-flight requests, but excludes
+    # pages already retained in results even before Crawlee marks them handled.
+    pending_requests = {requested_url}
+    enqueue_lock = asyncio.Lock()
     failure = None
     starting_page_skipped = False
     storage_client = MemoryStorageClient()
@@ -97,10 +101,33 @@ async def _crawl_page(
             return False
         return True
 
+    async def enqueue_links(links: list[str]) -> None:
+        requests = []
+        async with enqueue_lock:
+            for url in links:
+                if len(results) + len(pending_requests) >= max_pages:
+                    break
+                if url in results or url in pending_requests:
+                    continue
+                if await queue.get_request(url) is not None:
+                    continue
+                # Reserve before the queue write yields to another handler.
+                pending_requests.add(url)
+                requests.append(Request.from_url(url, unique_key=url))
+        # Release the lock before adding: a child can finish during this await
+        # and must be able to discover links of its own without deadlocking.
+        if requests:
+            await queue.add_requests(
+                requests,
+                wait_time_between_batches=timedelta(0),
+                wait_for_all_requests_to_be_added=True,
+            )
+
     @crawler.router.default_handler
     async def handle_page(context: BeautifulSoupCrawlingContext) -> None:
         nonlocal starting_page_skipped
         if len(results) >= max_pages:
+            pending_requests.discard(context.request.unique_key)
             return
         response = cast(HtmlResponse, context.http_response).response
         final_url = normalize_url(context.request.loaded_url or requested_url)
@@ -109,6 +136,7 @@ async def _crawl_page(
         if skip_reason is None and media_type not in {"text/html", "application/xhtml+xml"}:
             skip_reason = f"unsupported content type: {media_type or 'missing'}"
         if skip_reason is not None:
+            pending_requests.discard(context.request.unique_key)
             if context.request.unique_key == requested_url:
                 starting_page_skipped = True
             logger.info("Skipped page %s (reason=%s)", final_url, skip_reason)
@@ -117,12 +145,9 @@ async def _crawl_page(
             extract_page, response.text, final_url, context.soup, requested_url
         )
         # Record the starting page before its children can run during enqueue.
+        pending_requests.discard(context.request.unique_key)
         if retain_page(page):
-            await queue.add_requests(
-                [Request.from_url(url, unique_key=url) for url in links],
-                wait_time_between_batches=timedelta(0),
-                wait_for_all_requests_to_be_added=True,
-            )
+            await enqueue_links(links)
         metadata = await queue.get_metadata()
         logger.info(
             "Fetched page %s (status=%s, current_page_count=%s, pending_request_count=%s)",
@@ -135,6 +160,7 @@ async def _crawl_page(
     @crawler.failed_request_handler
     async def handle_failure(context, error: Exception) -> None:
         nonlocal failure
+        pending_requests.discard(context.request.unique_key)
         if len(results) >= max_pages:
             return
         if isinstance(error, FetchError) and 400 <= error.status_code < 500 and error.url:
@@ -171,6 +197,6 @@ async def _crawl_page(
         raise failure
     if not results and not starting_page_skipped:
         raise FetchError(502, "Crawlee could not fetch the upstream page.") from failure
-    # Different queued aliases may redirect to one final URL. Deduplicate output
-    # only; Crawlee's unique keys handle scheduling and cycles without a visited set.
+    # Different queued aliases may redirect to one final URL. The result dictionary
+    # deduplicates those destinations; Crawlee retains the scheduling history.
     return CrawlResponse(requested_url=requested_url, results=list(results.values()))

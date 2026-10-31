@@ -184,7 +184,7 @@ Create a request with:
 ```bash
 curl -X POST http://127.0.0.1:8000/llms-txt/requests \
   -H 'Content-Type: application/json' \
-  -d '{"url":"https://example.com/","fetch_timeout_seconds":120,"max_pages":250}'
+  -d '{"url":"https://example.com/","fetch_timeout_seconds":120,"max_pages":50}'
 ```
 
 The response is HTTP 201 with `id`, normalized `url`, `created_at`, `timestamp`,
@@ -205,11 +205,11 @@ in `configs`. Existing requests retain `configs=NULL` and use the default.
 
 The optional `max_pages` field sets the maximum number of unique links retained
 in each run's crawl result. It must be a positive JSON integer; omit it or pass
-`null` to use 250. The limit includes the starting page and retained 4xx links;
+`null` to use 50. The limit includes the starting page and retained 4xx links;
 skipped pages, retries, and duplicate redirect destinations do not add results.
 Custom values are stored alongside the timeout in `configs`, for example
-`{"fetch_timeout_seconds":120.0,"max_pages":250}`. Existing requests with no
-page limit in their configs also use 250.
+`{"fetch_timeout_seconds":120.0,"max_pages":50}`. Existing requests with no
+page limit in their configs also use 50.
 
 To schedule recurring generation, include `cron_expression`:
 
@@ -425,7 +425,15 @@ generation endpoints.
   expires before the result limit is reached, it raises a timeout error and the
   background job follows its retry policy.
 
-Once the result count reaches `max_pages` (250 by default), stop scheduling pages
+Only enqueue discovered links while the number of unique result links plus pending
+requests is below `max_pages` (50 by default). Pending includes queued and in-flight
+requests, and slots reserved for queue writes. A page moves out of pending when
+retained in results, so it is counted once. Queue reservations are serialized to
+keep concurrent handlers within the same budget. Known URLs do not reserve extra
+slots; skipped pages and duplicate redirect destinations release their slots for
+links discovered later. Links beyond the available budget are not queued.
+
+Continue processing queued pages. Once the result count reaches `max_pages`, stop scheduling pages
 and generate `llms.txt` from the collected results. A synchronous check and insert
 on the crawl's event loop keeps concurrent completions from exceeding the limit.
 Already active requests may finish, but cannot add results or enqueue more links
