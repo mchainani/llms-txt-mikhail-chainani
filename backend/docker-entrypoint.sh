@@ -18,7 +18,7 @@ case "$role" in
         printf 'ok\n' > "$health_directory/index.html"
         python -m http.server "${PORT:-10000}" --bind 0.0.0.0 \
             --directory "$health_directory" &
-        exec procrastinate --verbose \
+        exec procrastinate --log-level info \
             --log-format "${LOG_FORMAT:-%(asctime)s %(levelname)s [%(name)s] %(message)s}" \
             --app=llms_txt_gen.jobs.app worker "$@"
         ;;

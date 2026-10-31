@@ -62,6 +62,7 @@ Both roles run as a non-root user. Environment files are excluded from the image
 you can also supply configuration with `docker run --env-file .env ...`, ensuring
 the database hostname is reachable from the container.
 
+The worker logs at INFO level, suppressing DEBUG messages such as heartbeat updates.
 Server, access, and worker logs include a timestamp with milliseconds, log level,
 and logger name. Timestamps use the process's local timezone (UTC in the Docker
 image by default). The server uses `logging.json`; override `UVICORN_LOG_CONFIG`
@@ -98,7 +99,7 @@ Run the generation worker in a separate terminal with the virtual environment
 activated:
 
 ```bash
-procrastinate --verbose \
+procrastinate --log-level info \
   --log-format '%(asctime)s %(levelname)s [%(name)s] %(message)s' \
   --app=llms_txt_gen.jobs.app worker
 ```
