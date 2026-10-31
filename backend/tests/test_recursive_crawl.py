@@ -226,3 +226,21 @@ def test_non_html_linked_page_is_skipped_while_crawling_continues(monkeypatch, c
     assert result_urls(response) == ["https://example.com/", "https://example.com/ok"]
     assert response.results[1].title == "OK"
     assert not any(record.levelname == "ERROR" for record in caplog.records)
+
+
+def test_oversized_linked_page_is_skipped_while_crawling_continues(monkeypatch, caplog):
+    def upstream(request):
+        if request.url.path == "/":
+            return html_response('<a href="/large">Large</a><a href="/ok">OK</a>')
+        if request.url.path == "/large":
+            return html_response(
+                '<title>Too large</title><a href="/ignored">Ignore</a>'.ljust(2 * 1024 * 1024 + 1)
+            )
+        return html_response("<title>OK</title>")
+
+    with fetching(monkeypatch, upstream) as fetch:
+        response = fetch("https://example.com/")
+
+    assert result_urls(response) == ["https://example.com/", "https://example.com/ok"]
+    assert response.results[1].title == "OK"
+    assert not any(record.levelname == "ERROR" for record in caplog.records)

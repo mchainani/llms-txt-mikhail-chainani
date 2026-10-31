@@ -396,20 +396,22 @@ generation endpoints.
   credentials, malformed URLs, and schemes such as `mailto:`, `tel:`, and `javascript:`.
 - Return the normalized starting `requested_url` and a `results` array of
   crawled pages and links retained after 4xx fetch failures. Unless skipped for a non-HTML
-  media type, the starting page is always first, using its
+  media type or exceeding the HTML size limit, the starting page is always first, using its
   final URL after redirects; remaining pages follow completion order. Each result contains
   only its normalized final `url`, `title`, and `description`. Missing titles
   and descriptions are `null`. Extracted links are used internally for crawling.
 - Different aliases can redirect to the same final URL. They are distinct queue
   keys and may cause repeated fetches of that destination, but it appears only
   once in the response. Redirect destinations still undergo public-address checks.
-- Retain upstream HTTP 4xx responses and local 413 failures as links with
+- Retain upstream HTTP 4xx responses as links with
   `title=null` and `description=null`, including the starting page. Do not extract
   metadata or links from error responses. Continue crawling other queued pages.
   HTTP 429 is retried before retaining the link. Unsafe URLs are still rejected.
 - Skip successful responses whose media type is neither HTML nor XHTML, including
   missing content types. Do not read their bodies or include them in the results.
-  A non-HTML starting page returns an empty results array without failing the crawl.
+  Skip HTML larger than 2 MiB of decoded content, discarding partial metadata and links.
+  A starting page skipped for media type or size returns an empty results array
+  without failing the crawl. Other queued pages continue crawling.
 - Skip linked pages with other fetch failures after their retries, retaining other results.
   Other failures on the starting page raise `FetchError`. If the overall crawl deadline
   expires, it raises a timeout error and the background job follows its retry policy.
@@ -484,7 +486,8 @@ parameters; they can identify different pages.
   timeout, and 15-second per-operation network timeout.
 - Active HTTP requests share the overall crawl deadline and stop without retries
   when it expires.
-- Maximum 4 MiB of decoded HTML. Accept `text/html` and `application/xhtml+xml`.
+- Maximum 2 MiB of decoded HTML; larger pages are skipped. Accept `text/html` and
+  `application/xhtml+xml`.
 - User agent: `llms-txt-gen/0.1`.
 
 Set `FETCH_TIMEOUT_SECONDS` in the worker's environment or `.env` file to configure
@@ -497,7 +500,6 @@ timeouts still apply.
 | --- | --- |
 | 400 | Unsafe destination or embedded credentials |
 | 4xx | Upstream client error; retain the link with null metadata |
-| 413 | HTML exceeds 4 MiB; retain the link with null metadata |
 | 502 | DNS/network failure, upstream non-4xx error status, or invalid/excessive redirects |
 | 504 | Fetch deadline or network timeout |
 

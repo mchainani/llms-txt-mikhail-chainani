@@ -88,10 +88,13 @@ async def _crawl_page(
         response = cast(HtmlResponse, context.http_response).response
         final_url = normalize_url(context.request.loaded_url or requested_url)
         media_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
-        if media_type not in {"text/html", "application/xhtml+xml"}:
+        skip_reason = response.extensions.get("llms_txt_gen_skip_reason")
+        if skip_reason is None and media_type not in {"text/html", "application/xhtml+xml"}:
+            skip_reason = f"unsupported content type: {media_type or 'missing'}"
+        if skip_reason is not None:
             if context.request.unique_key == requested_url:
                 starting_page_skipped = True
-            logger.info("Skipped page %s (content_type=%s)", final_url, media_type or "missing")
+            logger.info("Skipped page %s (reason=%s)", final_url, skip_reason)
             return
         page, links = await anyio.to_thread.run_sync(
             extract_page, response.text, final_url, context.soup, requested_url

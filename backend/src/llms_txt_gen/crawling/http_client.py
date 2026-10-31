@@ -13,7 +13,7 @@ from crawlee.http_clients import HttpClient, HttpCrawlingResult
 
 from llms_txt_gen.urls import normalize_url
 
-MAX_HTML_BYTES = 4 * 1024 * 1024
+MAX_HTML_BYTES = 2 * 1024 * 1024
 MAX_REDIRECTS = 5
 REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 
@@ -111,8 +111,12 @@ class PublicHtmlTransport(httpx.AsyncBaseTransport):
             body = bytearray()
             async for chunk in response.aiter_bytes(chunk_size=16 * 1024):
                 if len(body) + len(chunk) > MAX_HTML_BYTES:
-                    raise FetchError(
-                        413, "The upstream HTML exceeds the 4 MiB limit.", url=str(request.url)
+                    # Discard partial HTML so it cannot supply metadata or links.
+                    return httpx.Response(
+                        response.status_code,
+                        headers={"content-type": media_type},
+                        content=b"",
+                        extensions={"llms_txt_gen_skip_reason": "HTML exceeds the 2 MiB limit"},
                     )
                 body.extend(chunk)
             headers = response.headers.copy()

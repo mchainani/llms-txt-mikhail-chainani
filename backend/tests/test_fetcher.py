@@ -367,8 +367,8 @@ def test_repeated_calls_to_the_same_url_are_independent(monkeypatch):
     assert calls == 2
 
 
-def test_accepts_html_at_four_mib_limit(monkeypatch):
-    html = "<title>Large page</title>".ljust(4 * 1024 * 1024)
+def test_accepts_html_at_two_mib_limit(monkeypatch):
+    html = "<title>Large page</title>".ljust(2 * 1024 * 1024)
     with fetching(monkeypatch, lambda request: html_response(html)) as fetch:
         response = fetch("https://example.com/")
     assert response.results[0].title == "Large page"
@@ -380,7 +380,6 @@ def test_accepts_html_at_four_mib_limit(monkeypatch):
         httpx.Response(403, text='<title>Blocked</title><a href="/challenge">Challenge</a>'),
         httpx.Response(404),
         httpx.Response(429),
-        html_response("<title>Too large</title>".ljust(4 * 1024 * 1024 + 1)),
     ],
 )
 def test_retains_unreadable_starting_page_with_null_metadata(monkeypatch, upstream_response):
@@ -424,6 +423,30 @@ def test_non_html_starting_page_is_skipped_without_errors(
             content=b'<title>Not HTML</title><a href="/ignored">Ignore</a>',
             headers={"content-type": media_type} if media_type else {},
         )
+
+    with fetching(monkeypatch, upstream) as fetch:
+        response = fetch("https://example.com/")
+
+    assert response.model_dump() == {"requested_url": "https://example.com/", "results": []}
+    assert not any(record.levelname == "ERROR" for record in caplog.records)
+
+
+@pytest.mark.parametrize("redirect", [False, True])
+@pytest.mark.parametrize("compressed", [False, True])
+def test_oversized_starting_page_is_skipped_without_errors(
+    monkeypatch, caplog, redirect, compressed
+):
+    html = '<title>Too large</title><a href="/ignored">Ignore</a>'.ljust(2 * 1024 * 1024 + 1)
+
+    def upstream(request):
+        if redirect and request.url.path == "/":
+            return httpx.Response(302, headers={"location": "/large"})
+        if compressed:
+            return httpx.Response(
+                200, content=gzip.compress(html.encode()),
+                headers={"content-type": "text/html", "content-encoding": "gzip"},
+            )
+        return html_response(html)
 
     with fetching(monkeypatch, upstream) as fetch:
         response = fetch("https://example.com/")
