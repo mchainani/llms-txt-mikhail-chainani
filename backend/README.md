@@ -393,7 +393,8 @@ generation endpoints.
 - Preserve query parameter values. Skip empty hrefs, fragment-only links, embedded
   credentials, malformed URLs, and schemes such as `mailto:`, `tel:`, and `javascript:`.
 - Return the normalized starting `requested_url` and a `results` array of
-  successfully crawled HTML pages, in first-success order. Each result contains
+  successfully crawled HTML pages. The starting page is always first, using its
+  final URL after redirects; remaining pages follow completion order. Each result contains
   only its normalized final `url`, `title`, and `description`. Missing titles
   and descriptions are `null`. Extracted links are used internally for crawling.
 - Different aliases can redirect to the same final URL. They are distinct queue
@@ -453,6 +454,14 @@ parameters; they can identify different pages.
   definition; the worker imports the crawler when it executes a generation job.
 - Crawlee owns the request lifecycle and HTML parsing. A custom client using
   Crawlee's public `HttpClient` interface preserves bounded public-only HTTP access.
+- Each crawl starts with a desired concurrency of 25 pages and a maximum of 25.
+  Crawlee can reduce concurrency under resource pressure. Set `CRAWL_CONCURRENCY`
+  to a positive integer in the worker's environment or `.env` file to change both
+  values, then restart the worker. This is separate from worker concurrency:
+  five simultaneous generation jobs can fetch up to 125 pages at once.
+- Page fetch logs include `pending_request_count`, covering queued and in-progress
+  requests. A final timing log covers the complete `fetch_page` operation, including
+  HTTP client setup and cleanup, on success, failure, or cancellation.
 - Retry temporary network failures, timeouts, HTTP 429, and HTTP 5xx responses up
   to two times within the same overall crawl deadline. Do not retry unsafe URLs,
   non-HTML or oversized responses, or permanent upstream errors.
@@ -463,6 +472,8 @@ parameters; they can identify different pages.
 - Disable upstream cookies and connection reuse to isolate hosts sharing an IP.
 - Maximum five redirects per page, configurable overall crawl deadline, five-second connect
   timeout, and 15-second per-operation network timeout.
+- Active HTTP requests share the overall crawl deadline and stop without retries
+  when it expires.
 - Maximum 2 MiB of decoded HTML. Accept `text/html` and `application/xhtml+xml`.
 - User agent: `llms-txt-gen/0.1`.
 

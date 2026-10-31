@@ -120,12 +120,15 @@ def test_crawl_returns_successful_urls_only(monkeypatch):
     with fetching(monkeypatch, lambda request: html_response(html)) as fetch:
         response = fetch("https://docs.example.com/guide/page")
 
-    assert result_urls(response) == [
-        "https://docs.example.com/guide/page",
-        "https://docs.example.com/start",
-        "https://docs.example.com/guide/page?version=2",
-        "https://docs.example.com/start?version=2",
-    ]
+    assert response.results[0].url == "https://docs.example.com/guide/page"
+    assert sorted(result_urls(response)) == sorted(
+        [
+            "https://docs.example.com/guide/page",
+            "https://docs.example.com/start",
+            "https://docs.example.com/guide/page?version=2",
+            "https://docs.example.com/start?version=2",
+        ]
+    )
 
 
 def test_document_base_resolves_links_without_changing_domain_scope(monkeypatch):
@@ -183,11 +186,14 @@ def test_exact_hostname_filter_preserves_different_schemes_and_ports(monkeypatch
     ) as fetch:
         response = fetch("https://example.com/")
 
-    assert result_urls(response) == [
-        "https://example.com/",
-        "https://example.com/docs",
-        "http://example.com:8080/help",
-    ]
+    assert response.results[0].url == "https://example.com/"
+    assert sorted(result_urls(response)) == sorted(
+        [
+            "https://example.com/",
+            "https://example.com/docs",
+            "http://example.com:8080/help",
+        ]
+    )
 
 
 @pytest.mark.parametrize(
@@ -247,12 +253,15 @@ def test_deduplicates_links_with_equivalent_query_strings(monkeypatch):
     with fetching(monkeypatch, lambda request: html_response(html)) as fetch:
         response = fetch("https://example.com/")
 
-    assert result_urls(response) == [
-        "https://example.com/",
-        "https://example.com/search?a=1&b=2&q=hello+world",
-        "https://example.com/search?tag=a&tag=b",
-        "https://example.com/search?tag=b&tag=a",
-    ]
+    assert response.results[0].url == "https://example.com/"
+    assert sorted(result_urls(response)) == sorted(
+        [
+            "https://example.com/",
+            "https://example.com/search?a=1&b=2&q=hello+world",
+            "https://example.com/search?tag=a&tag=b",
+            "https://example.com/search?tag=b&tag=a",
+        ]
+    )
 
 
 def test_normalizes_redirect_url_before_fetching(monkeypatch):

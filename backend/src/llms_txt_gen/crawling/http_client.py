@@ -1,5 +1,6 @@
 """Crawlee HTTP client with bounded, public-only network access."""
 
+import asyncio
 import ipaddress
 import socket
 from contextlib import asynccontextmanager
@@ -144,13 +145,26 @@ class HtmlResponse:
 class PublicHttpClient(HttpClient):
     """Crawlee adapter; the surrounding crawl context owns the HTTPX client."""
 
-    def __init__(self, client: httpx.AsyncClient) -> None:
+    def __init__(self, client: httpx.AsyncClient, *, deadline_at: float | None = None) -> None:
         super().__init__(persist_cookies_per_session=False)
         self._client = client
+        self._deadline_at = deadline_at
 
     async def crawl(self, request: Request, *, statistics=None, **kwargs) -> HttpCrawlingResult:
         try:
-            response = await self.send_request(request.url)
+            # Crawlee may wait for active navigation during cancellation. Give
+            # every HTTP request the crawl's deadline so that cleanup cannot
+            # wait for another network timeout or start a fresh retry.
+            async with asyncio.timeout_at(self._deadline_at):
+                if (
+                    self._deadline_at is not None
+                    and asyncio.get_running_loop().time() >= self._deadline_at
+                ):
+                    raise TimeoutError
+                response = await self.send_request(request.url)
+        except TimeoutError as exc:
+            request.no_retry = True
+            raise FetchError(504, "The upstream page timed out.") from exc
         except FetchError as exc:
             request.no_retry = not exc.retryable
             raise

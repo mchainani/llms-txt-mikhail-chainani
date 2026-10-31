@@ -3,6 +3,7 @@ import json
 import logging
 import os
 from datetime import timedelta
+from time import perf_counter
 from typing import cast
 from uuid import uuid4
 
@@ -27,14 +28,21 @@ from llms_txt_gen.crawling.parser import extract_page
 from llms_txt_gen.urls import normalize_url
 
 FETCH_TIMEOUT_SECONDS = float(os.environ.get("FETCH_TIMEOUT_SECONDS", "600"))
+CRAWL_CONCURRENCY = int(os.environ.get("CRAWL_CONCURRENCY", "25"))
 
 logger = logging.getLogger(__name__)
 
 
 async def fetch_page(url: str, configs: str | None = None) -> CrawlResponse:
     """Own each crawl's HTTP resources on the caller's event loop."""
-    async with create_http_client() as client:
-        return await _crawl_page(client, url, configs)
+    started = perf_counter()
+    try:
+        async with create_http_client() as client:
+            return await _crawl_page(client, url, configs)
+    finally:
+        logger.info(
+            "Fetch page operation for %s finished in %.3f seconds", url, perf_counter() - started
+        )
 
 
 async def _crawl_page(
@@ -47,6 +55,7 @@ async def _crawl_page(
     )
     if timeout_seconds is None:
         timeout_seconds = FETCH_TIMEOUT_SECONDS
+    deadline_at = asyncio.get_running_loop().time() + timeout_seconds
     results: dict[str, PageResult] = {}
     failure = None
     storage_client = MemoryStorageClient()
@@ -56,7 +65,7 @@ async def _crawl_page(
     )
     crawler = BeautifulSoupCrawler(
         parser="html.parser",
-        http_client=PublicHttpClient(client),
+        http_client=PublicHttpClient(client, deadline_at=deadline_at),
         storage_client=storage_client,
         request_manager=queue,
         event_manager=LocalEventManager(),
@@ -66,7 +75,9 @@ async def _crawl_page(
         use_session_pool=False,
         retry_on_blocked=False,
         configure_logging=False,
-        concurrency_settings=ConcurrencySettings(max_concurrency=1, desired_concurrency=1),
+        concurrency_settings=ConcurrencySettings(
+            max_concurrency=CRAWL_CONCURRENCY, desired_concurrency=CRAWL_CONCURRENCY
+        ),
         request_handler_timeout=timedelta(seconds=timeout_seconds),
     )
 
@@ -77,21 +88,19 @@ async def _crawl_page(
         page, links = await anyio.to_thread.run_sync(
             extract_page, response.text, final_url, context.soup, requested_url
         )
+        # Record the starting page before its children can run during enqueue.
+        results.setdefault(final_url, page)
         await queue.add_requests(
             [Request.from_url(url, unique_key=url) for url in links],
             wait_time_between_batches=timedelta(0),
             wait_for_all_requests_to_be_added=True,
         )
-        results.setdefault(final_url, page)
         metadata = await queue.get_metadata()
-        # Crawlee marks this page handled after the handler returns. With one
-        # concurrent request, exclude it to count only pages waiting to be fetched.
-        queue_size = metadata.pending_request_count - 1
         logger.info(
-            "Fetched page %s (status=%s, queue_size=%s)",
+            "Fetched page %s (status=%s, pending_request_count=%s)",
             final_url,
             response.status_code,
-            queue_size,
+            metadata.pending_request_count,
         )
 
     @crawler.failed_request_handler
@@ -100,7 +109,7 @@ async def _crawl_page(
         if context.request.unique_key == requested_url:
             failure = error
 
-    deadline = asyncio.timeout(timeout_seconds)
+    deadline = asyncio.timeout_at(deadline_at)
     try:
         async with deadline:
             await crawler.run([Request.from_url(requested_url, unique_key=requested_url)])
