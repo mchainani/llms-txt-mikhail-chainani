@@ -38,7 +38,7 @@ def test_create_run_persists_pending_row(request_id, runs_client, run_database):
     assert row["status"] == "pending"
     assert row["file_id"] is None
     assert row["num_links"] is None
-    assert "retry_count" not in row
+    assert row["retry_count"] == 0
     assert "llms_txt" not in row
     assert row["created_at"].utcoffset() is not None
     assert row["timestamp"].utcoffset() is not None
@@ -59,7 +59,7 @@ def test_create_run_persists_pending_row(request_id, runs_client, run_database):
     assert fetched.json()["num_links"] is None
     assert fetched.json()["job_id"] == str(job["id"])
     assert "llms_txt" not in fetched.json()
-    assert "retry_count" not in fetched.json()
+    assert fetched.json()["retry_count"] == 0
 
 
 def test_list_runs_returns_all_fields_and_empty_list(request_id, runs_client, run_database):
@@ -91,6 +91,7 @@ def test_list_runs_returns_all_fields_and_empty_list(request_id, runs_client, ru
         "timestamp",
         "job_id",
         "num_links",
+        "retry_count",
     }
     assert first["job_id"] is None
     assert first["num_links"] is None
@@ -315,6 +316,7 @@ def test_worker_uses_persisted_timeout(
     run_queue()
     record = runs_client.get(f"/llms-txt/requests/{request_id}/runs/latest").json()
     assert record["status"] == expected_status
+    assert record["retry_count"] == 1
     files = run_database.execute("SELECT content FROM llms_txt_files").fetchall()
     if expected_status == "success":
         assert len(files) == 1
@@ -544,7 +546,7 @@ def test_worker_skips_non_pending_runs(
     )
 
 
-def test_missing_run_schedules_retry_without_fetching(
+def test_missing_run_finishes_without_fetching(
     request_id, runs_client, run_database, upstream, run_queue
 ):
     runs_client.post(f"/llms-txt/requests/{request_id}/runs")
@@ -552,16 +554,16 @@ def test_missing_run_schedules_retry_without_fetching(
     run_queue()
     assert upstream == []
     job = run_database.execute("SELECT status, attempts FROM procrastinate_jobs").fetchone()
-    assert job["status"] == "todo"
+    assert job["status"] == "succeeded"
     assert job["attempts"] == 1
 
 
-@pytest.mark.parametrize("initial_attempts", [0, 5])
+@pytest.mark.parametrize("initial_retry_count", [0, 4])
 def test_generation_failure_retries_after_30_seconds(
-    request_id, runs_client, run_database, monkeypatch, upstream, run_queue, initial_attempts
+    request_id, runs_client, run_database, monkeypatch, upstream, run_queue, initial_retry_count
 ):
     run_id = runs_client.post(f"/llms-txt/requests/{request_id}/runs").json()["id"]
-    run_database.execute("UPDATE procrastinate_jobs SET attempts = %s", (initial_attempts,))
+    run_database.execute("UPDATE llms_txt_runs SET retry_count = %s", (initial_retry_count,))
     monkeypatch.setattr(
         httpx,
         "AsyncHTTPTransport",
@@ -580,10 +582,14 @@ def test_generation_failure_retries_after_30_seconds(
         """
     ).fetchone()
     assert job["status"] == "todo"
-    assert job["attempts"] == initial_attempts + 1
+    assert job["attempts"] == 1
+    assert (
+        runs_client.get(f"/llms-txt/requests/{request_id}/runs/{run_id}").json()["retry_count"]
+        == initial_retry_count + 1
+    )
     assert 25 < job["retry_delay"] <= 30
 
-    if initial_attempts == 5:
+    if initial_retry_count == 4:
         # After the last generation attempt fails, finalize without another crawl.
         run_database.execute("UPDATE procrastinate_jobs SET scheduled_at = now()")
         run_queue()
@@ -598,25 +604,28 @@ def test_generation_failure_retries_after_30_seconds(
 
 
 @pytest.mark.parametrize(
-    ("attempts", "expected_status", "expected_calls"),
+    ("retry_count", "attempts", "expected_status", "expected_calls"),
     [
-        (5, "success", ["example.com"]),
-        (6, "failed", []),
-        (100, "failed", []),
+        (0, 100, "success", ["example.com"]),
+        (4, 0, "success", ["example.com"]),
+        (5, 0, "failed", []),
+        (100, 0, "failed", []),
     ],
 )
-def test_worker_stops_generation_only_after_five_retries(
+def test_worker_uses_persisted_retry_count_and_stops_above_five(
     request_id,
     runs_client,
     run_database,
     upstream,
     run_queue,
+    retry_count,
     attempts,
     expected_status,
     expected_calls,
 ):
     run_id = runs_client.post(f"/llms-txt/requests/{request_id}/runs").json()["id"]
     run_database.execute("UPDATE procrastinate_jobs SET attempts = %s", (attempts,))
+    run_database.execute("UPDATE llms_txt_runs SET retry_count = %s", (retry_count,))
     run_database.execute(
         'UPDATE llms_txt_runs SET "timestamp" = %s WHERE id = %s',
         ("2000-01-01T00:00:00Z", run_id),
@@ -626,6 +635,7 @@ def test_worker_stops_generation_only_after_five_retries(
 
     record = runs_client.get(f"/llms-txt/requests/{request_id}/runs/{run_id}").json()
     assert record["status"] == expected_status
+    assert record["retry_count"] == retry_count + 1
     assert datetime.fromisoformat(record["timestamp"]) > datetime.fromisoformat(
         "2000-01-01T00:00:00+00:00"
     )
@@ -641,10 +651,14 @@ def test_retry_limit_does_not_overwrite_completed_run(
 ):
     run_id = runs_client.post(f"/llms-txt/requests/{request_id}/runs").json()["id"]
     run_database.execute("UPDATE procrastinate_jobs SET attempts = 6")
-    run_database.execute("UPDATE llms_txt_runs SET status = 'success'")
+    run_database.execute("UPDATE llms_txt_runs SET status = 'success', retry_count = 5")
     run_queue()
     assert upstream == []
     assert (
         runs_client.get(f"/llms-txt/requests/{request_id}/runs/{run_id}").json()["status"]
         == "success"
+    )
+
+    assert (
+        runs_client.get(f"/llms-txt/requests/{request_id}/runs/{run_id}").json()["retry_count"] == 5
     )

@@ -21,8 +21,9 @@ class RunRepository(Repository[Run]):
         "file_id",
         "job_id",
         "num_links",
+        "retry_count",
     )
-    mutable_columns = ("status", "file_id", "num_links")
+    mutable_columns = ("status", "file_id", "num_links", "retry_count")
     order_by = ("created_at", "id")
     entity_type = Run
 
@@ -45,6 +46,7 @@ class RunRepository(Repository[Run]):
         status: str = "pending",
         file_id: UUID | None = None,
         num_links: int | None = None,
+        retry_count: int = 0,
         id: UUID | None = None,
     ) -> Run:
         """Enqueue processing and create its run atomically on this connection."""
@@ -67,6 +69,7 @@ class RunRepository(Repository[Run]):
                     "file_id": file_id,
                     "job_id": str(job_id),
                     "num_links": num_links,
+                    "retry_count": retry_count,
                 }
             )
 

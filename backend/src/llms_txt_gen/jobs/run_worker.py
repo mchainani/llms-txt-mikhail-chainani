@@ -24,28 +24,29 @@ logger = logging.getLogger(__name__)
 )
 async def process_run(context: JobContext, run_id: str) -> None:
     run_uuid = UUID(run_id)
-    logger.info(
-        "Processing run %s (job_id=%s, attempt=%s)",
-        run_id,
-        context.job.id,
-        context.job.attempts + 1,
-    )
     async with database_connection() as connection:
-        if context.job.attempts > MAX_RETRY_COUNT:
 
-            def fail_if_pending(current: Run) -> Run:
-                if current.status == "pending":
-                    return replace(current, status="failed")
+        def start_attempt(current: Run) -> Run:
+            if current.status != "pending":
                 return current
+            retry_count = current.retry_count + 1
+            return replace(
+                current,
+                retry_count=retry_count,
+                status="failed" if retry_count > MAX_RETRY_COUNT else "pending",
+            )
 
-            try:
-                await RunRepository(connection).modify(run_uuid, fail_if_pending)
-            except NoDataFound:
-                # A deleted run has nothing left to mark failed at the retry cutoff.
-                pass
-            logger.warning("Run %s exceeded retry limit (%s)", run_id, context.job.attempts)
+        try:
+            record = await RunRepository(connection).modify(run_uuid, start_attempt)
+        except NoDataFound:
+            logger.info("Skipping deleted run %s (job_id=%s)", run_id, context.job.id)
             return
-        record = await RunRepository(connection).read(run_uuid)
+        logger.info(
+            "Processing run %s (job_id=%s, retry_count=%s)",
+            run_id,
+            context.job.id,
+            record.retry_count,
+        )
         if record.status != "pending":
             logger.info("Skipping run %s with status %s", run_id, record.status)
             return

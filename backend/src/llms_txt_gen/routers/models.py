@@ -71,3 +71,4 @@ class RunInfo(BaseModel):
     timestamp: datetime
     job_id: str | None
     num_links: int | None
+    retry_count: int

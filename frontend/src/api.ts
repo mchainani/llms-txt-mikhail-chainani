@@ -13,6 +13,7 @@ export interface RunInfo {
   request_id: string;
   status: string;
   file_id: string | null;
+  retry_count: number;
   created_at: string;
   timestamp: string;
   job_id: string | null;

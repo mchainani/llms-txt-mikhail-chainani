@@ -26,6 +26,7 @@ class Run:
     timestamp: datetime
     job_id: str | None = None
     num_links: int | None = None
+    retry_count: int = 0
 
 
 @dataclass(frozen=True)

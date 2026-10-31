@@ -141,16 +141,17 @@ sets the run status to `success`, updates `timestamp`, and logs the resulting
 UUID, and updates the run's nullable `file_id` and success status before
 committing. If the locked run is no longer pending, it returns successfully
 without inserting a file. Already completed or otherwise non-pending
-runs are skipped. The task receives Procrastinate's job context and uses an
-Procrastinate retry strategy with a fixed 30-second delay. The application allows
-the initial generation attempt plus five retries (attempt counts 0 through 5).
-At the next invocation, when `context.job.attempts > 5`, it marks a pending run
-`failed`, updates its timestamp, and returns successfully without another crawl.
-Already completed runs are preserved; deleted runs need no terminal update.
-Each invocation logs the run ID, job ID, and attempt number. The counter comes
-from Procrastinate; the application table does not duplicate it. Generation
-errors leave the run pending until it succeeds or reaches the cutoff. Recovery
-of jobs abandoned by a hard-killed worker is not configured. Jobs already marked
+runs are skipped. The task uses a Procrastinate retry strategy with a fixed
+30-second delay. Before generation, it atomically increments the pending run's
+persisted `retry_count`, committing the increment before crawling so failures
+retain the count. Counts 1 through 5 allow generation. When the incremented count
+exceeds 5, the same update marks the run `failed` and refreshes its timestamp;
+the job returns successfully without another crawl. Completed runs and their
+counts are preserved. Jobs for deleted runs finish without generation.
+Each invocation logs the run ID, job ID, and persisted
+retry count. Procrastinate's attempt counter does not control this limit.
+Generation errors leave the run pending until it succeeds or reaches the cutoff.
+Recovery of jobs abandoned by a hard-killed worker is not configured. Jobs already marked
 failed must be explicitly retried; changing the task policy does not automatically
 requeue them.
 
@@ -227,8 +228,8 @@ curl -X POST http://127.0.0.1:8000/llms-txt/requests/REQUEST_UUID/runs
 ```
 
 The response is HTTP 201 with `{"id":"<run_uuid>"}`. The run references the existing
-request and starts with `status='pending'`, `file_id=null`, and `num_links=null`. The run and its
-Procrastinate generation job are inserted, and the job's integer ID is saved as
+request and starts with `status='pending'`, `file_id=null`, `num_links=null`, and
+`retry_count=0`. The run and its Procrastinate generation job are inserted, and the job's integer ID is saved as
 text in the run's `job_id`, in one Postgres transaction. If either insert or the
 job ID update fails, all three operations roll back and the existing request
 remains. The worker loads the URL from that request after commit; jobs for the
@@ -245,8 +246,8 @@ curl http://127.0.0.1:8000/llms-txt/requests/REQUEST_UUID/runs/RUN_UUID/files
 ```
 
 Run responses include `id`, `request_id`, `status`, `file_id`, `created_at`,
-`timestamp`, nullable `job_id`, and nullable integer `num_links`. Successful runs save
-`num_links` as the number of successful pages in the crawl results, including the
+`timestamp`, nullable `job_id`, nullable integer `num_links`, and integer
+`retry_count`. Successful runs save `num_links` as the number of successful pages in the crawl results, including the
 starting page, in the same transaction as the generated file and success status.
 `latest` returns the run with the newest
 `created_at` for that request, regardless of status; a request with no runs
@@ -289,7 +290,8 @@ or raises `NoDataFound` if there are no runs for the request.
 or async callback, and writes the returned replacement in the same transaction.
 Use `dataclasses.replace` to change fields; returning the unchanged entity skips
 the write. Requests allow changes only to `job_id`; runs allow changes only to
-`status`, `file_id`, and `num_links`. IDs and database-generated timestamps cannot be replaced.
+`status`, `file_id`, `num_links`, and `retry_count`. IDs and database-generated
+timestamps cannot be replaced.
 Request and run updates refresh `timestamp` automatically and preserve `created_at`.
 Files reject every `modify` call with `ValueError` without invoking the callback.
 
@@ -342,6 +344,9 @@ docker exec -i llms-txt-postgres \
 docker exec -i llms-txt-postgres \
   psql -U app_dev -d llms_txt_dev -v ON_ERROR_STOP=1 --single-transaction \
   < migrations/006_add_request_configs.sql
+docker exec -i llms-txt-postgres \
+  psql -U app_dev -d llms_txt_dev -v ON_ERROR_STOP=1 --single-transaction \
+  < migrations/007_add_run_retry_count.sql
 ```
 
 This creates `public.llms_txt_requests`, `public.llms_txt_runs`, and
@@ -361,6 +366,9 @@ no status field; run status continues to track generation progress.
 runs retain `num_links=NULL` until explicitly updated.
 `006_add_request_configs.sql` adds nullable TEXT `configs` to requests for JSON
 configuration, including per-request `fetch_timeout_seconds`.
+
+`007_add_run_retry_count.sql` adds `retry_count INT NOT NULL DEFAULT 0` to runs;
+existing rows are initialized to zero.
 
 ## Background crawling
 

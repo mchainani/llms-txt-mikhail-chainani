@@ -709,3 +709,23 @@ def test_modify_rejects_immutable_fields_and_rolls_back_callback_writes(
             assert await cursor.fetchall() == original_jobs
 
     anyio.run(scenario)
+
+
+@pytest.mark.parametrize("retry_count", [0, 4, 6])
+def test_run_retry_count_round_trips_and_can_be_incremented(run_database, request_id, retry_count):
+    async def scenario():
+        async with database_connection() as connection:
+            repo = RunRepository(connection)
+            run = await repo.create(request_id=request_id, retry_count=retry_count)
+            assert run.retry_count == retry_count
+            assert (await repo.read(run.id)).retry_count == retry_count
+            assert (await repo.list())[0].retry_count == retry_count
+            assert (await repo.list_by_request_id(request_id))[0].retry_count == retry_count
+            assert (await repo.get_latest_by_request_id(request_id)).retry_count == retry_count
+            updated = await repo.modify(
+                run.id, lambda current: replace(current, retry_count=current.retry_count + 1)
+            )
+            assert updated.retry_count == retry_count + 1
+            assert (await repo.read(run.id)).retry_count == retry_count + 1
+
+    anyio.run(scenario)

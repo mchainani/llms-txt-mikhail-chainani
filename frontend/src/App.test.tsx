@@ -5,11 +5,11 @@ import { describe, expect, it, vi } from 'vitest';
 import App from './App';
 
 const request = {
-  id: 'request-1', url: 'https://example.com/', cron_expression: null,
+  id: 'request-1', url: 'https://example.com/', cron_expression: null, configs: null,
   created_at: '2026-10-30T12:00:00Z', timestamp: '2026-10-30T12:00:00Z', job_id: null,
 };
 const run = {
-  id: 'run-1', request_id: 'request-1', status: 'success', file_id: 'file-1',
+  id: 'run-1', request_id: 'request-1', status: 'success', file_id: 'file-1', num_links: 1, retry_count: 3,
   created_at: '2026-10-30T12:00:00Z', timestamp: '2026-10-30T12:01:00Z', job_id: null,
 };
 const file = {
@@ -220,6 +220,13 @@ describe('request workflow', () => {
     expect(await screen.findByText('Pending')).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: /View file/ })).not.toBeInTheDocument();
     expect(screen.getByText(/refresh.*5 seconds/i)).toBeInTheDocument();
+  });
+
+  it.each([0, 3, 6])('shows retry count %i in the runs table', async (retryCount) => {
+    serve({ [`${base}/request-1/runs`]: [{ ...run, retry_count: retryCount }] });
+    open('/requests/request-1/runs');
+    expect(await screen.findByRole('columnheader', { name: 'Retry count' })).toBeInTheDocument();
+    expect(screen.getByRole('cell', { name: String(retryCount) })).toBeInTheDocument();
   });
 
   it('shows an empty request list', async () => {
