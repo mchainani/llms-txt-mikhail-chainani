@@ -152,26 +152,6 @@ describe('request workflow', () => {
     expect(screen.getByRole('button', { name: 'Delete request request-1' })).toBeEnabled();
   });
 
-  it.each([
-    ['Content driven', 'beautifulsoup'],
-    ['JavaScript heavy', 'playwright'],
-  ])('submits the %s site type using %s', async (label, crawler) => {
-    const fetcher = serve();
-    const user = userEvent.setup();
-    open();
-    await user.click(screen.getByRole('button', { name: 'New request' }));
-    expect(screen.getByRole('group', { name: 'What type of site is this?' })).toBeInTheDocument();
-    expect(screen.getByRole('radio', { name: /Content driven/ })).toBeChecked();
-    await user.click(screen.getByRole('radio', { name: new RegExp(label) }));
-    await user.type(screen.getByLabelText('Website URL'), 'https://example.com/');
-    await user.click(screen.getByRole('button', { name: 'Create request' }));
-    expect(await screen.findByRole('heading', { name: 'Request runs' })).toBeInTheDocument();
-    const post = fetcher.mock.calls.find(([, options]) => options?.method === 'POST');
-    expect(JSON.parse(post?.[1]?.body as string)).toEqual({
-      url: 'https://example.com/', cron_expression: null, crawler,
-    });
-  });
-
   it.each([['', null], [' 0 9 * * 1 ', '0 9 * * 1']])(
     'submits a URL with cron %j and opens its runs', async (cron, expected) => {
       const fetcher = serve();
@@ -185,7 +165,7 @@ describe('request workflow', () => {
       const post = fetcher.mock.calls.find(([, options]) => options?.method === 'POST');
       expect(post?.[0]).toBe(base);
       expect(JSON.parse(post?.[1]?.body as string)).toEqual({
-        url: 'https://example.com/', cron_expression: expected, crawler: 'beautifulsoup',
+        url: 'https://example.com/', cron_expression: expected,
       });
     },
   );
@@ -201,7 +181,7 @@ describe('request workflow', () => {
     expect(await screen.findByRole('heading', { name: 'Request runs' })).toBeInTheDocument();
     const post = fetcher.mock.calls.find(([, options]) => options?.method === 'POST');
     expect(JSON.parse(post?.[1]?.body as string)).toEqual({
-      url: 'https://example.com/', cron_expression: null, crawler: 'beautifulsoup', fetch_timeout_seconds: Number(timeout),
+      url: 'https://example.com/', cron_expression: null, fetch_timeout_seconds: Number(timeout),
     });
   });
 
@@ -218,7 +198,7 @@ describe('request workflow', () => {
     expect(await screen.findByRole('heading', { name: 'Request runs' })).toBeInTheDocument();
     const post = fetcher.mock.calls.find(([, options]) => options?.method === 'POST');
     expect(JSON.parse(post?.[1]?.body as string)).toEqual({
-      url: 'https://example.com/', cron_expression: null, crawler: 'beautifulsoup',
+      url: 'https://example.com/', cron_expression: null,
       ...(limit ? { max_pages: Number(limit) } : {}),
     });
   });

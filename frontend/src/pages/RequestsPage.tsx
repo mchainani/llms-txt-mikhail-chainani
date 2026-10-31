@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { createRequest, requestPath, requestsPath } from '../api';
-import type { CrawlerType, RequestInfo } from '../api';
+import type { RequestInfo } from '../api';
 import { ErrorNotice, Loading, Timestamp } from '../components';
 import { useResource } from '../useResource';
 import { DeleteButton } from '../DeleteButton';
@@ -17,7 +17,6 @@ export function RequestsPage() {
   const [cron, setCron] = useState('');
   const [timeout, setTimeout] = useState('');
   const [maxPages, setMaxPages] = useState('');
-  const [crawler, setCrawler] = useState<CrawlerType>('beautifulsoup');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const mounted = useRef(true);
@@ -37,7 +36,7 @@ export function RequestsPage() {
     setError(null);
     setSubmitting(true);
     try {
-      const created = await createRequest(url, cron, timeout, maxPages, crawler);
+      const created = await createRequest(url, cron, timeout, maxPages);
       if (mounted.current) { navigate(`/requests/${created.id}/runs`); }
     } catch (error) {
       if (mounted.current) { setError(error instanceof Error ? error.message : 'Unable to create the request.'); }
@@ -51,19 +50,6 @@ export function RequestsPage() {
       <form onSubmit={submit}>
         <div className="form-fields">
           <div className="field url-field"><label htmlFor="website-url">Website URL</label><input id="website-url" type="url" pattern="https?://.+" title="Enter an HTTP or HTTPS URL" placeholder="https://example.com" required autoFocus value={url} onChange={(event) => setUrl(event.target.value)} disabled={submitting} /><p className="field-hint">The page you want to generate an llms.txt file from.</p></div>
-          <fieldset className="site-type-field" disabled={submitting}>
-            <legend>What type of site is this?</legend>
-            <div className="site-type-options">
-              <label className={`site-type-option${crawler === 'beautifulsoup' ? ' selected' : ''}`}>
-                <input type="radio" name="site-type" value="beautifulsoup" checked={crawler === 'beautifulsoup'} onChange={() => setCrawler('beautifulsoup')} />
-                <span><strong>Content driven</strong><span className="site-type-description">Articles, blogs, and documentation with content that loads directly.</span></span>
-              </label>
-              <label className={`site-type-option${crawler === 'playwright' ? ' selected' : ''}`}>
-                <input type="radio" name="site-type" value="playwright" checked={crawler === 'playwright'} onChange={() => setCrawler('playwright')} />
-                <span><strong>JavaScript heavy</strong><span className="site-type-description">Interactive apps and sites that load content after the page opens.</span></span>
-              </label>
-            </div>
-          </fieldset>
           <div className="field"><label htmlFor="cron">Cron expression <span className="optional">optional</span></label><input id="cron" className="mono" placeholder="0 9 * * 1" aria-describedby="cron-hint" value={cron} onChange={(event) => setCron(event.target.value)} disabled={submitting} /><p id="cron-hint" className="field-hint">Leave blank to run once. Schedules use UTC.</p></div>
           <div className="field"><label htmlFor="fetch-timeout">Fetch timeout (seconds) <span className="optional">optional</span></label><input id="fetch-timeout" type="number" min="0" step="any" placeholder="Server default" aria-describedby="fetch-timeout-hint" value={timeout} onChange={(event) => { setTimeout(event.target.value); event.target.setCustomValidity(event.target.value !== '' && Number(event.target.value) <= 0 ? 'Enter a timeout greater than zero.' : ''); }} disabled={submitting} /><p id="fetch-timeout-hint" className="field-hint">Maximum time for the entire crawl. Leave blank to use the server default.</p></div>
           <div className="field"><label htmlFor="max-pages">Maximum pages <span className="optional">optional</span></label><input id="max-pages" type="number" min="1" step="1" placeholder="50" aria-describedby="max-pages-hint" value={maxPages} onChange={(event) => setMaxPages(event.target.value)} disabled={submitting} /><p id="max-pages-hint" className="field-hint">Stop after collecting this many unique page links, then generate the file. Leave blank to use 50.</p></div>

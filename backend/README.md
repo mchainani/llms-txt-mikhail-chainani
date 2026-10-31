@@ -41,33 +41,14 @@ export DATABASE_URL='postgresql://app_dev:local_dev_password@host.docker.interna
 docker run --rm --name llms-txt-server -p 8000:8000 \
   -e DATABASE_URL llms-txt-gen server
 
-# Worker automatically starts headless Chromium, waits for CDP, then consumes jobs.
-docker run --rm --init --stop-timeout 20 --name llms-txt-worker \
+# Procrastinate worker, in a separate terminal with DATABASE_URL exported
+docker run --rm --name llms-txt-worker \
   -e DATABASE_URL llms-txt-gen worker
 ```
 
-The image includes Playwright's matching Chromium binary and Linux browser
-dependencies in `/ms-playwright`, readable by the non-root `app` user. The
-`server` role runs `llms_txt_gen.main:app`. The `worker` role supervises headless
-Chromium and the Procrastinate worker (`llms_txt_gen.jobs.app`). With no
-`PLAYWRIGHT_CDP_URL` configured, it starts Chromium on `127.0.0.1:9222`, waits up
-to 30 seconds for CDP readiness, and supplies that endpoint to the worker.
-No separate Chrome startup command or browser port mapping is needed.
-
-Extra arguments after the role are forwarded to Uvicorn or Procrastinate, for
-example `llms-txt-gen worker --concurrency 4`. Setting `PLAYWRIGHT_CDP_URL` explicitly
-uses an externally managed browser instead and skips the embedded Chromium process.
-Leave it unset for automatic browser startup; do not pass a localhost endpoint
-unless you already run a browser there.
-
-SIGTERM/SIGINT stops the worker first, then the managed health listener and browser.
-Shutdown allows up to 10 seconds total before killing stuck process groups;
-`--stop-timeout 20` gives the supervisor time to finish cleanup. If Chromium or
-the health listener exits unexpectedly, the supervisor stops the worker and exits
-with an error, allowing the container platform's restart policy to recover it.
-Chromium runs with `--no-sandbox` for container compatibility and
-`--disable-dev-shm-usage` to avoid Docker's small default shared-memory allocation.
-Keep the network isolation described below for untrusted crawl targets.
+The `server` role runs `llms_txt_gen.main:app`; `worker` runs
+`llms_txt_gen.jobs.app`. Extra arguments after the role are forwarded to Uvicorn
+or the Procrastinate worker, for example `llms-txt-gen worker --concurrency 4`.
 The worker also starts a minimal HTTP listener on `0.0.0.0`, using `PORT` (default
 `10000`), so it can deploy as a Render Web Service. Keep the Render Docker Command
 as `docker-entrypoint.sh worker`. The listener serves an `ok` page from an isolated
@@ -87,111 +68,6 @@ and logger name. Timestamps use the process's local timezone (UTC in the Docker
 image by default). The server uses `logging.json`; override `UVICORN_LOG_CONFIG`
 to select another logging configuration file. Override `LOG_FORMAT` to customize
 the worker's log format.
-
-## Playwright crawler prototype
-
-Requests can opt into Crawlee's `PlaywrightCrawler` to execute JavaScript in a
-separate headless Chromium process. BeautifulSoup remains the default. Both
-engines use the same metadata extraction, hostname filtering, URL normalization,
-result limit, and `llms.txt` generation. No database migration is needed: the
-engine and render wait are persisted in the request's existing `configs` JSON.
-
-Install the updated dependencies in the backend virtual environment, then start
-Chromium in its own terminal:
-
-```bash
-python -m pip install -c requirements.lock -e '.[dev]'
-python -m playwright install chromium
-python scripts/chromium_sidecar.py
-```
-
-To use an existing Chrome installation on macOS instead of downloading Chromium:
-
-```bash
-python scripts/chromium_sidecar.py \
-  --executable '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
-```
-
-The launcher uses a disposable profile and exposes CDP on localhost only. It does
-not use your normal browser profile. Stop it with Ctrl+C. Set the endpoint in the
-worker environment (or `.env`) and restart the worker:
-
-```bash
-export PLAYWRIGHT_CDP_URL=http://127.0.0.1:9222
-export PLAYWRIGHT_CONCURRENCY=3
-```
-
-The Docker worker starts its bundled Chromium automatically as described above.
-The two-terminal setup here is for a manually started local worker. You can also
-run `python -m llms_txt_gen.worker_service` locally after installing Chromium:
-it uses the same managed startup and shutdown as Docker when `PLAYWRIGHT_CDP_URL`
-is unset. For a separately managed Chromium service, `PLAYWRIGHT_CDP_URL`
-can be its CDP HTTP or WebSocket endpoint. The sidecar must be reachable from
-the worker; localhost inside a worker container refers to that container. Keep
-CDP on a trusted private interface. It grants full control of the browser.
-
-Select Playwright when creating a request:
-
-```bash
-curl -X POST http://127.0.0.1:8000/llms-txt/requests \
-  -H 'Content-Type: application/json' \
-  -d '{"url":"https://audio-tour.pages.dev/","crawler":"playwright","render_wait_seconds":1,"max_pages":50}'
-```
-
-`crawler` accepts `beautifulsoup` or `playwright`; omitted/null uses BeautifulSoup.
-`render_wait_seconds` is a finite number from 0 to 60, defaults to 1, and applies
-only to Playwright. The browser waits after DOMContentLoaded before reading the
-rendered DOM. This is a prototype readiness heuristic: applications that load
-content later may need a larger wait. The browser follows rendered `a[href]`
-links; it does not click buttons, scroll, sign in, or play audio. Missing
-`PLAYWRIGHT_CDP_URL` fails the opted-in run with an explicit configuration error
-when Procrastinate is launched directly. The Docker worker supervisor supplies
-this setting automatically for its managed browser.
-
-Each crawl opens its own incognito contexts and disconnects after closing them,
-leaving the sidecar running. Browser concurrency defaults to 3 rather than the
-HTTP engine's 25. The total crawl deadline also closes active browser contexts.
-Images, media, fonts, WebSockets, and service workers are blocked to limit
-unnecessary work. Rendered HTML above 2 MiB is skipped, but browser downloads and
-DOM creation are not bounded by the HTTP engine's streaming HTML limit.
-
-**Prototype network limits:** public-address DNS checks apply before browser
-navigation and resource fetches. HTTP redirects are deliberately blocked because
-Playwright does not route subsequent redirect hops through the guard. Chromium
-performs its own DNS resolution, so these checks do not provide the HTTP
-engine's IP pinning or protect against DNS rebinding. Run this opt-in mode in an
-isolated environment with egress rules denying private/internal networks before
-exposing it to untrusted requests. The checks run in the worker's DNS environment,
-which may differ from a remote sidecar's network.
-
-### Repeatable comparison demo
-
-With the sidecar running and `PLAYWRIGHT_CDP_URL` exported:
-
-```bash
-python scripts/compare_crawlers.py https://audio-tour.pages.dev/ \
-  --output demo-output --max-pages 50
-```
-
-Open `demo-output/index.html` for the side-by-side report. It includes screenshots
-with scripts disabled/enabled, each engine's extracted titles and URLs, crawl
-JSON, timing, and generated `llms.txt`. This command calls the same `fetch_page`
-function used by the generation worker, without a database or background job.
-The visual capture makes two additional visits to the starting page. Images are
-blocked in these captures, matching the crawler's network settings. Generated
-outputs are ignored by Git and can be recreated with this command.
-
-Run the real-browser integration tests against a disposable sidecar:
-
-```bash
-PLAYWRIGHT_TEST_CDP_URL=http://127.0.0.1:9222 \
-  python -m pytest tests/test_playwright_crawl.py -q
-```
-
-The browser tests serve controlled responses through Playwright routing and
-exercise JavaScript rendering, recursion, deduplication, result limits, fresh
-crawl storage, 404 retention, unsafe addresses, and deadlines. Without the test
-endpoint, the browser integration tests skip; option validation still runs.
 
 ## Postgres and background jobs
 
@@ -557,8 +433,8 @@ after the limit. If the deadline expires while they finish, the collected result
 are still returned successfully. Queued requests are discarded during cleanup.
 
 There is no crawl-depth limit. The overall crawl deadline
-and per-page network limits below still apply. The default BeautifulSoup crawler does not execute
-JavaScript. Neither engine summarizes content. The worker uses the Python functions below to
+and per-page network limits below still apply. The crawler does not execute
+JavaScript or summarize content. The worker uses the Python functions below to
 generate `llms.txt`.
 
 ### URL normalization

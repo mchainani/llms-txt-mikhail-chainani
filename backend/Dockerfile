@@ -3,7 +3,6 @@ FROM python:3.14-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
     UVICORN_LOG_CONFIG=/app/logging.json \
     LOG_FORMAT="%(asctime)s %(levelname)s [%(name)s] %(message)s"
 
@@ -12,8 +11,6 @@ WORKDIR /app
 COPY pyproject.toml requirements.lock README.md logging.json ./
 COPY src/ ./src/
 RUN python -m pip install --no-cache-dir -c requirements.lock . \
-    && python -m playwright install --with-deps --no-shell chromium \
-    && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --uid 10001 app \
     && chown app:app /app
 

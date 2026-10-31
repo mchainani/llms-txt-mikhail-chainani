@@ -11,14 +11,13 @@ import anyio
 import httpx
 from crawlee import ConcurrencySettings, Request
 from crawlee.configuration import Configuration
-from crawlee.crawlers import BeautifulSoupCrawler
+from crawlee.crawlers import BeautifulSoupCrawler, BeautifulSoupCrawlingContext
 from crawlee.events import LocalEventManager
 from crawlee.statistics import Statistics
 from crawlee.storage_clients import MemoryStorageClient
 from crawlee.storages import RequestQueue
 
 from llms_txt_gen.crawling.http_client import (
-    MAX_HTML_BYTES,
     FetchError,
     HtmlResponse,
     PublicHttpClient,
@@ -59,12 +58,6 @@ async def _crawl_page(
     timeout_seconds = options.get("fetch_timeout_seconds")
     if timeout_seconds is None:
         timeout_seconds = FETCH_TIMEOUT_SECONDS
-    crawler_mode = options.get("crawler") or "beautifulsoup"
-    if crawler_mode not in {"beautifulsoup", "playwright"}:
-        raise ValueError(f"Unknown crawler: {crawler_mode}")
-    render_wait = options.get("render_wait_seconds")
-    if render_wait is None:
-        render_wait = 1.0
     deadline_at = asyncio.get_running_loop().time() + timeout_seconds
     results: dict[str, PageResult] = {}
     failure = None
@@ -74,7 +67,9 @@ async def _crawl_page(
     queue = await RequestQueue.open(
         name=f"page-{uuid4().hex}", storage_client=storage_client, configuration=configuration
     )
-    crawler_options = dict(
+    crawler = BeautifulSoupCrawler(
+        parser="html.parser",
+        http_client=PublicHttpClient(client, deadline_at=deadline_at),
         storage_client=storage_client,
         request_manager=queue,
         event_manager=LocalEventManager(),
@@ -84,23 +79,11 @@ async def _crawl_page(
         use_session_pool=False,
         retry_on_blocked=False,
         configure_logging=False,
+        concurrency_settings=ConcurrencySettings(
+            max_concurrency=CRAWL_CONCURRENCY, desired_concurrency=CRAWL_CONCURRENCY
+        ),
         request_handler_timeout=timedelta(seconds=timeout_seconds),
     )
-    if crawler_mode == "playwright":
-        from llms_txt_gen.crawling.browser import create_browser_crawler
-
-        crawler = create_browser_crawler(
-            timeout_seconds=timeout_seconds, deadline_at=deadline_at, **crawler_options
-        )
-    else:
-        crawler = BeautifulSoupCrawler(
-            parser="html.parser",
-            http_client=PublicHttpClient(client, deadline_at=deadline_at),
-            concurrency_settings=ConcurrencySettings(
-                max_concurrency=CRAWL_CONCURRENCY, desired_concurrency=CRAWL_CONCURRENCY
-            ),
-            **crawler_options,
-        )
 
     def retain_page(page: PageResult) -> bool:
         # No await: the check and insertion run together on the crawl's event loop,
@@ -114,34 +97,15 @@ async def _crawl_page(
             return False
         return True
 
-    async def process_page(context) -> None:
+    @crawler.router.default_handler
+    async def handle_page(context: BeautifulSoupCrawlingContext) -> None:
         nonlocal starting_page_skipped
         if len(results) >= max_pages:
             return
+        response = cast(HtmlResponse, context.http_response).response
         final_url = normalize_url(context.request.loaded_url or requested_url)
-        if crawler_mode == "playwright":
-            response = context.response
-            status_code = response.status
-            headers = await response.all_headers()
-            skip_reason = None
-            if 400 <= status_code < 500:
-                retain_page(PageResult(url=final_url, title=None, description=None))
-                return
-            # DOMContentLoaded alone can precede React hydration or asynchronous rendering.
-            await context.page.wait_for_timeout(render_wait * 1000)
-            html = await context.page.content()
-            if len(html.encode("utf-8")) > MAX_HTML_BYTES:
-                skip_reason = "Rendered HTML exceeds the 2 MiB limit"
-            soup = None
-            final_url = normalize_url(context.page.url)
-        else:
-            response = cast(HtmlResponse, context.http_response).response
-            status_code = response.status_code
-            headers = response.headers
-            skip_reason = response.extensions.get("llms_txt_gen_skip_reason")
-            html = response.text
-            soup = context.soup
-        media_type = headers.get("content-type", "").split(";", 1)[0].strip().lower()
+        media_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+        skip_reason = response.extensions.get("llms_txt_gen_skip_reason")
         if skip_reason is None and media_type not in {"text/html", "application/xhtml+xml"}:
             skip_reason = f"unsupported content type: {media_type or 'missing'}"
         if skip_reason is not None:
@@ -150,7 +114,7 @@ async def _crawl_page(
             logger.info("Skipped page %s (reason=%s)", final_url, skip_reason)
             return
         page, links = await anyio.to_thread.run_sync(
-            extract_page, html, final_url, soup, requested_url
+            extract_page, response.text, final_url, context.soup, requested_url
         )
         # Record the starting page before its children can run during enqueue.
         if retain_page(page):
@@ -163,15 +127,10 @@ async def _crawl_page(
         logger.info(
             "Fetched page %s (status=%s, current_page_count=%s, pending_request_count=%s)",
             final_url,
-            status_code,
+            response.status_code,
             len(results),
             metadata.pending_request_count,
         )
-
-    @crawler.router.default_handler
-    async def handle_page(context):
-        async with asyncio.timeout_at(deadline_at):
-            await process_page(context)
 
     @crawler.failed_request_handler
     async def handle_failure(context, error: Exception) -> None:
