@@ -425,15 +425,7 @@ generation endpoints.
   expires before the result limit is reached, it raises a timeout error and the
   background job follows its retry policy.
 
-Only enqueue discovered links while the number of unique result links plus pending
-requests is below `max_pages` (50 by default). Pending includes queued and in-flight
-requests, and slots reserved for queue writes. A page moves out of pending when
-retained in results, so it is counted once. Queue reservations are serialized to
-keep concurrent handlers within the same budget. Known URLs do not reserve extra
-slots; skipped pages and duplicate redirect destinations release their slots for
-links discovered later. Links beyond the available budget are not queued.
-
-Continue processing queued pages. Once the result count reaches `max_pages`, stop scheduling pages
+Once the result count reaches `max_pages` (50 by default), stop scheduling pages
 and generate `llms.txt` from the collected results. A synchronous check and insert
 on the crawl's event loop keeps concurrent completions from exceeding the limit.
 Already active requests may finish, but cannot add results or enqueue more links
