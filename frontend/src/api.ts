@@ -67,13 +67,14 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
   return response.json() as Promise<T>;
 }
 
-export function createRequest(url: string, cron: string, timeout = ''): Promise<RequestInfo> {
+export function createRequest(url: string, cron: string, timeout = '', maxPages = ''): Promise<RequestInfo> {
   return api(requestsPath, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       url: url.trim(), cron_expression: cron.trim() || null,
       ...(timeout.trim() ? { fetch_timeout_seconds: Number(timeout) } : {}),
+      ...(maxPages.trim() ? { max_pages: Number(maxPages) } : {}),
     }),
   });
 }

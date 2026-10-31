@@ -8,6 +8,36 @@ from fastapi.testclient import TestClient
 
 from llms_txt_gen.cron import next_cron_time
 from llms_txt_gen.main import create_app
+from llms_txt_gen.routers.models import FetchPageRequest
+
+
+@pytest.mark.parametrize("limit", [1, 250, 500, None])
+def test_max_pages_accepts_positive_integers_or_default(limit):
+    payload = FetchPageRequest(url="https://example.com/", max_pages=limit)
+    assert payload.max_pages == limit
+
+
+@pytest.mark.parametrize("limit", [0, -1, 1.5, True, "250", {}, []])
+def test_max_pages_rejects_invalid_values(limit):
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        FetchPageRequest(url="https://example.com/", max_pages=limit)
+
+
+@pytest.mark.parametrize("limit", [1, 500])
+def test_request_page_limit_persists_with_timeout(requests_client, run_database, limit):
+    response = requests_client.post(
+        "/llms-txt/requests",
+        json={"url": "https://example.com/", "max_pages": limit, "fetch_timeout_seconds": 120},
+    )
+    assert response.status_code == 201
+    record = response.json()
+    assert json.loads(record["configs"]) == {"max_pages": limit, "fetch_timeout_seconds": 120}
+    stored = run_database.execute(
+        "SELECT configs FROM llms_txt_requests WHERE id = %s", (record["id"],)
+    ).fetchone()
+    assert stored["configs"] == record["configs"]
 
 
 @pytest.fixture

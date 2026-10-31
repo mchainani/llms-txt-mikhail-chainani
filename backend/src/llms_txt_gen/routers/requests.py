@@ -15,14 +15,11 @@ router = APIRouter(prefix="/llms-txt/requests", tags=["requests"])
 
 @router.post("", response_model=RequestInfo, status_code=201)
 async def create_request(payload: FetchPageRequest, connection: DatabaseConnection) -> RequestInfo:
+    configs = payload.model_dump(exclude={"url", "cron_expression"}, exclude_none=True)
     row = await RequestRepository(connection).create(
         url=str(payload.url),
         cron_expression=payload.cron_expression,
-        configs=(
-            json.dumps({"fetch_timeout_seconds": payload.fetch_timeout_seconds})
-            if payload.fetch_timeout_seconds is not None
-            else None
-        ),
+        configs=json.dumps(configs) if configs else None,
     )
     return RequestInfo.model_validate(row, from_attributes=True)
 

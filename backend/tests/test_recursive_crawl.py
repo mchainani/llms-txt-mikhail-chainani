@@ -1,4 +1,5 @@
 import asyncio
+import json
 from collections import Counter
 
 import httpx
@@ -7,6 +8,162 @@ from test_fetcher import fetching, html_response, result_urls
 
 from llms_txt_gen.crawling import fetcher
 from llms_txt_gen.crawling.http_client import FetchError
+
+
+@pytest.mark.parametrize(
+    "configs, expected",
+    [
+        (None, 250),
+        ('{"max_pages": null}', 250),
+        ('{"max_pages": 1}', 1),
+        ('{"max_pages": 3}', 3),
+        ('{"max_pages": 300}', 271),
+    ],
+)
+def test_result_limit_stops_crawling_and_preserves_collected_pages(monkeypatch, configs, expected):
+    visits = []
+
+    async def upstream(request):
+        visits.append(request.url.path)
+        if request.url.path == "/":
+            return html_response(
+                "<title>Root</title>" + "".join(f'<a href="/page-{i}">Page</a>' for i in range(270))
+            )
+        await asyncio.sleep(0.001)
+        return html_response('<title>Child</title><a href="/">Root</a>')
+
+    with fetching(monkeypatch, upstream) as fetch:
+        response = fetch("https://example.com/", configs)
+
+    assert len(response.results) == expected
+    assert response.results[0].title == "Root"
+    assert len(set(result_urls(response))) == expected
+    if expected < 250:
+        assert len(visits) < 271
+    if expected == 1:
+        assert visits == ["/"]
+    from llms_txt_gen.generation.generator import build_document, render_document
+
+    assert render_document(build_document(response)).startswith("# Root\n")
+
+
+def test_concurrent_completions_cannot_exceed_result_limit(monkeypatch):
+    monkeypatch.setattr(fetcher, "CRAWL_CONCURRENCY", 6)
+    active = 0
+    peak = 0
+    visits = []
+
+    async def exercise():
+        saturated = asyncio.Event()
+
+        async def upstream(request):
+            nonlocal active, peak
+            visits.append(request.url.path)
+            if request.url.path == "/":
+                return html_response("".join(f'<a href="/{i}">Page</a>' for i in range(40)))
+            active += 1
+            peak = max(peak, active)
+            if active == 6:
+                saturated.set()
+            try:
+                await asyncio.wait_for(saturated.wait(), 2)
+                return html_response("<title>Child</title>")
+            finally:
+                active -= 1
+
+        with fetching(monkeypatch, upstream):
+            return await fetcher.fetch_page("https://example.com/", '{"max_pages": 3}')
+
+    response = asyncio.run(exercise())
+    assert len(response.results) == 3
+    assert peak == 6
+    assert active == 0
+    assert len(visits) < 41
+
+
+def test_limit_counts_retained_errors_but_not_skips_or_redirect_duplicates(monkeypatch):
+    monkeypatch.setattr(fetcher, "CRAWL_CONCURRENCY", 1)
+    visits = []
+
+    def upstream(request):
+        visits.append(request.url.path)
+        if request.url.path == "/":
+            return html_response(
+                '<a href="/skip">Skip</a><a href="/alias">Alias</a>'
+                '<a href="/page">Page</a><a href="/missing">Missing</a>'
+                '<a href="/later">Later</a>'
+            )
+        if request.url.path == "/skip":
+            return httpx.Response(200, headers={"content-type": "application/pdf"})
+        if request.url.path == "/alias":
+            return httpx.Response(302, headers={"location": "/page"})
+        if request.url.path == "/missing":
+            return httpx.Response(404)
+        return html_response("<title>Page</title>")
+
+    with fetching(monkeypatch, upstream) as fetch:
+        response = fetch("https://example.com/", json.dumps({"max_pages": 3}))
+
+    assert result_urls(response) == [
+        "https://example.com/",
+        "https://example.com/page",
+        "https://example.com/missing",
+    ]
+    assert response.results[-1].title is None
+    assert "/later" not in visits
+
+
+def test_reached_limit_returns_results_when_in_flight_page_hits_deadline(monkeypatch):
+    monkeypatch.setattr(fetcher, "CRAWL_CONCURRENCY", 2)
+    active = 0
+
+    async def exercise():
+        slow_started = asyncio.Event()
+
+        async def upstream(request):
+            nonlocal active
+            if request.url.path == "/":
+                return html_response('<a href="/fast">Fast</a><a href="/slow">Slow</a>')
+            active += 1
+            try:
+                if request.url.path == "/slow":
+                    slow_started.set()
+                    await asyncio.sleep(2)
+                else:
+                    await asyncio.wait_for(slow_started.wait(), 1)
+                return html_response("<title>Child</title>")
+            finally:
+                active -= 1
+
+        with fetching(monkeypatch, upstream):
+            return await fetcher.fetch_page(
+                "https://example.com/", '{"max_pages": 2, "fetch_timeout_seconds": 0.5}'
+            )
+
+    response = asyncio.run(exercise())
+    assert result_urls(response) == ["https://example.com/", "https://example.com/fast"]
+    assert active == 0
+
+
+def test_pending_request_log_includes_current_result_count_at_limit(monkeypatch, caplog):
+    monkeypatch.setattr(fetcher, "CRAWL_CONCURRENCY", 1)
+    caplog.set_level("INFO", logger=fetcher.__name__)
+
+    def upstream(request):
+        return html_response('<a href="/child">Child</a>')
+
+    with fetching(monkeypatch, upstream) as fetch:
+        response = fetch("https://example.com/", '{"max_pages": 2}')
+
+    assert len(response.results) == 2
+    assert (
+        "Fetched page https://example.com/ "
+        "(status=200, current_page_count=1, pending_request_count="
+    ) in caplog.text
+    assert (
+        "Fetched page https://example.com/child "
+        "(status=200, current_page_count=2, pending_request_count="
+    ) in caplog.text
 
 
 @pytest.mark.parametrize("limit", [None, 3, 1])
@@ -191,7 +348,9 @@ def test_client_errors_are_retained_while_other_pages_are_crawled(monkeypatch, s
         response = fetch("https://example.com/")
     pages = {page.url: page for page in response.results}
     assert set(pages) == {
-        "https://example.com/", "https://example.com/missing", "https://example.com/ok"
+        "https://example.com/",
+        "https://example.com/missing",
+        "https://example.com/ok",
     }
     assert pages["https://example.com/missing"].title is None
     assert pages["https://example.com/missing"].description is None

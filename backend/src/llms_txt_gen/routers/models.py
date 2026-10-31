@@ -14,6 +14,12 @@ class FetchPageRequest(BaseModel):
 
     url: HttpUrl
     cron_expression: str | None = None
+    max_pages: int | None = Field(
+        default=None,
+        gt=0,
+        strict=True,
+        description="Maximum unique links in the crawl result. Omit or pass null to use 250.",
+    )
     fetch_timeout_seconds: float | None = Field(
         default=None,
         gt=0,

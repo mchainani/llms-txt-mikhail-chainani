@@ -29,6 +29,7 @@ from llms_txt_gen.urls import normalize_url
 
 FETCH_TIMEOUT_SECONDS = float(os.environ.get("FETCH_TIMEOUT_SECONDS", "600"))
 CRAWL_CONCURRENCY = int(os.environ.get("CRAWL_CONCURRENCY", "25"))
+DEFAULT_MAX_PAGES = 250
 
 logger = logging.getLogger(__name__)
 
@@ -50,9 +51,11 @@ async def _crawl_page(
 ) -> CrawlResponse:
     """Recursively crawl normalized links on the original requested hostname."""
     requested_url = normalize_url(url)
-    timeout_seconds = (json.loads(configs) if configs is not None else {}).get(
-        "fetch_timeout_seconds"
-    )
+    options = json.loads(configs) if configs is not None else {}
+    max_pages = options.get("max_pages")
+    if max_pages is None:
+        max_pages = DEFAULT_MAX_PAGES
+    timeout_seconds = options.get("fetch_timeout_seconds")
     if timeout_seconds is None:
         timeout_seconds = FETCH_TIMEOUT_SECONDS
     deadline_at = asyncio.get_running_loop().time() + timeout_seconds
@@ -82,9 +85,23 @@ async def _crawl_page(
         request_handler_timeout=timedelta(seconds=timeout_seconds),
     )
 
+    def retain_page(page: PageResult) -> bool:
+        # No await: the check and insertion run together on the crawl's event loop,
+        # including when other handlers resume after extracting pages in threads.
+        if len(results) >= max_pages:
+            return False
+        results.setdefault(page.url, page)
+        if len(results) >= max_pages:
+            logger.info("Reached result limit of %s pages for %s", max_pages, requested_url)
+            crawler.stop(reason=f"Collected {max_pages} unique result links.")
+            return False
+        return True
+
     @crawler.router.default_handler
     async def handle_page(context: BeautifulSoupCrawlingContext) -> None:
         nonlocal starting_page_skipped
+        if len(results) >= max_pages:
+            return
         response = cast(HtmlResponse, context.http_response).response
         final_url = normalize_url(context.request.loaded_url or requested_url)
         media_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
@@ -100,25 +117,28 @@ async def _crawl_page(
             extract_page, response.text, final_url, context.soup, requested_url
         )
         # Record the starting page before its children can run during enqueue.
-        results.setdefault(final_url, page)
-        await queue.add_requests(
-            [Request.from_url(url, unique_key=url) for url in links],
-            wait_time_between_batches=timedelta(0),
-            wait_for_all_requests_to_be_added=True,
-        )
+        if retain_page(page):
+            await queue.add_requests(
+                [Request.from_url(url, unique_key=url) for url in links],
+                wait_time_between_batches=timedelta(0),
+                wait_for_all_requests_to_be_added=True,
+            )
         metadata = await queue.get_metadata()
         logger.info(
-            "Fetched page %s (status=%s, pending_request_count=%s)",
+            "Fetched page %s (status=%s, current_page_count=%s, pending_request_count=%s)",
             final_url,
             response.status_code,
+            len(results),
             metadata.pending_request_count,
         )
 
     @crawler.failed_request_handler
     async def handle_failure(context, error: Exception) -> None:
         nonlocal failure
+        if len(results) >= max_pages:
+            return
         if isinstance(error, FetchError) and 400 <= error.status_code < 500 and error.url:
-            results.setdefault(error.url, PageResult(url=error.url, title=None, description=None))
+            retain_page(PageResult(url=error.url, title=None, description=None))
             logger.info(
                 "Retained page %s without metadata (status=%s)", error.url, error.status_code
             )
@@ -136,12 +156,16 @@ async def _crawl_page(
     except Exception as exc:
         # Cancellation during Crawlee startup can surface as a statistics error.
         if isinstance(exc, TimeoutError) or deadline.expired():
-            raise FetchError(504, "The upstream page timed out.") from exc
-        raise
+            # Once the result limit is met, a slow in-flight page must not turn
+            # the completed collection into a failed generation run.
+            if len(results) < max_pages:
+                raise FetchError(504, "The upstream page timed out.") from exc
+        else:
+            raise
     finally:
         await queue.drop()
     # Crawlee can consume cancellation while stopping a run; retain our deadline.
-    if deadline.expired():
+    if deadline.expired() and len(results) < max_pages:
         raise FetchError(504, "The upstream page timed out.")
     if isinstance(failure, FetchError):
         raise failure

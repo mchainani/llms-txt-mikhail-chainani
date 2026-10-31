@@ -185,6 +185,36 @@ describe('request workflow', () => {
     });
   });
 
+  it.each(['', '1', '500'])('submits maximum pages %j with a default of 250', async (limit) => {
+    const fetcher = serve();
+    const user = userEvent.setup();
+    open();
+    await user.click(screen.getByRole('button', { name: 'New request' }));
+    await user.type(screen.getByLabelText('Website URL'), 'https://example.com/');
+    const input = screen.getByLabelText(/Maximum pages/);
+    expect(input).toHaveAttribute('placeholder', '250');
+    if (limit) { await user.type(input, limit); }
+    await user.click(screen.getByRole('button', { name: 'Create request' }));
+    expect(await screen.findByRole('heading', { name: 'Request runs' })).toBeInTheDocument();
+    const post = fetcher.mock.calls.find(([, options]) => options?.method === 'POST');
+    expect(JSON.parse(post?.[1]?.body as string)).toEqual({
+      url: 'https://example.com/', cron_expression: null,
+      ...(limit ? { max_pages: Number(limit) } : {}),
+    });
+  });
+
+  it.each(['0', '-1', '1.5'])('rejects invalid maximum pages %s before submission', async (limit) => {
+    const fetcher = serve();
+    const user = userEvent.setup();
+    open();
+    await user.click(screen.getByRole('button', { name: 'New request' }));
+    await user.type(screen.getByLabelText('Website URL'), 'https://example.com/');
+    await user.type(screen.getByLabelText(/Maximum pages/), limit);
+    await user.click(screen.getByRole('button', { name: 'Create request' }));
+    expect(screen.getByLabelText(/Maximum pages/)).toBeInvalid();
+    expect(fetcher.mock.calls.some(([, options]) => options?.method === 'POST')).toBe(false);
+  });
+
   it('shows backend cron validation without losing the entered values', async () => {
     serve();
     vi.stubGlobal('fetch', vi.fn(async (_input: string, options?: RequestInit) =>

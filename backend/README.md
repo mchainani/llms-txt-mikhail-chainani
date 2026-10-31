@@ -184,7 +184,7 @@ Create a request with:
 ```bash
 curl -X POST http://127.0.0.1:8000/llms-txt/requests \
   -H 'Content-Type: application/json' \
-  -d '{"url":"https://example.com/","fetch_timeout_seconds":120}'
+  -d '{"url":"https://example.com/","fetch_timeout_seconds":120,"max_pages":250}'
 ```
 
 The response is HTTP 201 with `id`, normalized `url`, `created_at`, `timestamp`,
@@ -202,6 +202,14 @@ seconds are supported. Omit it or pass `null` to use `FETCH_TIMEOUT_SECONDS`
 (600 seconds by default). The request's nullable `configs` TEXT column stores
 `{"fetch_timeout_seconds":120.0}` as JSON text; responses expose that JSON text
 in `configs`. Existing requests retain `configs=NULL` and use the default.
+
+The optional `max_pages` field sets the maximum number of unique links retained
+in each run's crawl result. It must be a positive JSON integer; omit it or pass
+`null` to use 250. The limit includes the starting page and retained 4xx links;
+skipped pages, retries, and duplicate redirect destinations do not add results.
+Custom values are stored alongside the timeout in `configs`, for example
+`{"fetch_timeout_seconds":120.0,"max_pages":250}`. Existing requests with no
+page limit in their configs also use 250.
 
 To schedule recurring generation, include `cron_expression`:
 
@@ -414,9 +422,17 @@ generation endpoints.
   without failing the crawl. Other queued pages continue crawling.
 - Skip linked pages with other fetch failures after their retries, retaining other results.
   Other failures on the starting page raise `FetchError`. If the overall crawl deadline
-  expires, it raises a timeout error and the background job follows its retry policy.
+  expires before the result limit is reached, it raises a timeout error and the
+  background job follows its retry policy.
 
-There is no page-count or crawl-depth limit. The overall crawl deadline
+Once the result count reaches `max_pages` (250 by default), stop scheduling pages
+and generate `llms.txt` from the collected results. A synchronous check and insert
+on the crawl's event loop keeps concurrent completions from exceeding the limit.
+Already active requests may finish, but cannot add results or enqueue more links
+after the limit. If the deadline expires while they finish, the collected results
+are still returned successfully. Queued requests are discarded during cleanup.
+
+There is no crawl-depth limit. The overall crawl deadline
 and per-page network limits below still apply. The crawler does not execute
 JavaScript or summarize content. The worker uses the Python functions below to
 generate `llms.txt`.
@@ -471,8 +487,10 @@ parameters; they can identify different pages.
   to a positive integer in the worker's environment or `.env` file to change both
   values, then restart the worker. This is separate from worker concurrency:
   five simultaneous generation jobs can fetch up to 125 pages at once.
-- Page fetch logs include `pending_request_count`, covering queued and in-progress
-  requests. A final timing log covers the complete `fetch_page` operation, including
+- Page fetch logs include `current_page_count`, the number of unique retained
+  result links, and `pending_request_count`, covering queued and in-progress
+  requests. The page that reaches the result limit is also logged. A final timing
+  log covers the complete `fetch_page` operation, including
   HTTP client setup and cleanup, on success, failure, or cancellation.
 - Retry temporary network failures, timeouts, HTTP 429, and HTTP 5xx responses up
   to two times within the same overall crawl deadline. Do not retry unsafe URLs,
