@@ -1,5 +1,7 @@
 # llms-txt-mikhail-chainani
 
+See the [screenshot demo](docs/DEMO.md) for a walkthrough from creating a request to downloading `llms.txt`.
+
 The Python API and background workers live in [`backend/`](backend/).
 See the [backend README](backend/README.md) for setup, Docker, database, and testing instructions.
 
