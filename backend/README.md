@@ -1,4 +1,4 @@
-# llms-txt-gen
+# llms-txt-mikhail-chainani
 
 Recursively crawl public HTML pages by following `a[href]` links on the starting
 URL's hostname. Built with Python, FastAPI, Crawlee, HTTPX, and BeautifulSoup.
@@ -10,7 +10,7 @@ jobs. FastAPI creates and lists persisted runs without loading Crawlee.
 Requires Python 3.12 or newer.
 
 ```bash
-cd ~/dev/llms-txt-gen/backend
+cd ~/dev/llms-txt-mikhail-chainani/backend
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -c requirements.lock -e '.[dev]'

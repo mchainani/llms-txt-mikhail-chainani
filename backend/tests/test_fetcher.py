@@ -392,7 +392,9 @@ def test_retains_unreadable_starting_page_with_null_metadata(monkeypatch, upstre
     with fetching(monkeypatch, upstream) as fetch:
         response = fetch("https://example.com/")
     assert response.results[0].model_dump() == {
-        "url": "https://example.com/", "title": None, "description": None
+        "url": "https://example.com/",
+        "title": None,
+        "description": None,
     }
     assert calls == ["/"] * (3 if upstream_response.status_code == 429 else 1)
 
@@ -406,7 +408,9 @@ def test_retains_final_redirect_url_for_unreadable_page(monkeypatch):
     with fetching(monkeypatch, upstream) as fetch:
         response = fetch("https://example.com/")
     assert response.results[0].model_dump() == {
-        "url": "https://example.com/blocked", "title": None, "description": None
+        "url": "https://example.com/blocked",
+        "title": None,
+        "description": None,
     }
 
 
@@ -443,7 +447,8 @@ def test_oversized_starting_page_is_skipped_without_errors(
             return httpx.Response(302, headers={"location": "/large"})
         if compressed:
             return httpx.Response(
-                200, content=gzip.compress(html.encode()),
+                200,
+                content=gzip.compress(html.encode()),
                 headers={"content-type": "text/html", "content-encoding": "gzip"},
             )
         return html_response(html)

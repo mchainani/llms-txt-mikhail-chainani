@@ -1,4 +1,4 @@
-# llms-txt-gen
+# llms-txt-mikhail-chainani
 
 The Python API and background workers live in [`backend/`](backend/).
 See the [backend README](backend/README.md) for setup, Docker, database, and testing instructions.
