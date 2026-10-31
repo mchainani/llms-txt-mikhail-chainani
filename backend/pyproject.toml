@@ -1,0 +1,34 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "llms-txt-gen"
+version = "0.1.0"
+description = "Fetch HTML pages and extract links for an llms.txt generation pipeline."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "beautifulsoup4>=4.13,<5",
+    "crawlee[beautifulsoup]==1.11.0",
+    "croniter>=6,<7",
+    "fastapi>=0.115,<1",
+    "httpx>=0.28,<0.29",
+    "procrastinate>=3.10,<4",
+    "psycopg[binary,pool]>=3.2,<4",
+    "python-dotenv>=1.2,<2",
+    "uvicorn>=0.34,<1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<10", "ruff>=0.11,<1"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC"]
