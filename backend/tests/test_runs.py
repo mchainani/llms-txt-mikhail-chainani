@@ -277,9 +277,9 @@ def test_worker_generates_logs_and_marks_success(
     assert stored_file["created_at"].utcoffset() is not None
     assert stored_file["timestamp"].utcoffset() is not None
     assert any(
-        run_id in record.getMessage() and expected in record.getMessage()
-        for record in caplog.records
+        record.getMessage() == f"Generated markdown for run {run_id}" for record in caplog.records
     )
+    assert expected not in caplog.text
 
     # Simulate redelivery after the run's success was already committed.
     run_database.execute("UPDATE procrastinate_jobs SET status = 'todo'")

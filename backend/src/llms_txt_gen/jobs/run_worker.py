@@ -89,4 +89,4 @@ async def process_run(context: JobContext, run_id: str) -> None:
             await RunRepository(connection).modify(run_uuid, complete)
             if file_id is None:
                 return
-        logger.info("Generated markdown for run %s:\n%s", run_id, llms_txt)
+        logger.info("Generated markdown for run %s", run_id)
