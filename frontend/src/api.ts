@@ -13,6 +13,7 @@ export interface RunInfo {
   request_id: string;
   status: string;
   file_id: string | null;
+  num_links: number | null;
   retry_count: number;
   created_at: string;
   timestamp: string;
