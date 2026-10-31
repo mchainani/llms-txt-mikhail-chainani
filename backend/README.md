@@ -49,6 +49,15 @@ docker run --rm --name llms-txt-worker \
 The `server` role runs `llms_txt_gen.main:app`; `worker` runs
 `llms_txt_gen.jobs.app`. Extra arguments after the role are forwarded to Uvicorn
 or the Procrastinate worker, for example `llms-txt-gen worker --concurrency 4`.
+The worker also starts a minimal HTTP listener on `0.0.0.0`, using `PORT` (default
+`10000`), so it can deploy as a Render Web Service. Keep the Render Docker Command
+as `docker-entrypoint.sh worker`. The listener serves an `ok` page from an isolated
+temporary directory; it does not check job processing or database health. To
+access it locally, add `-p 10000:10000` to the worker's `docker run` command.
+Render's free Web Services can spin down during inactivity, stopping job
+processing until the service wakes up; use a Background Worker for continuous
+processing.
+
 Both roles run as a non-root user. Environment files are excluded from the image;
 you can also supply configuration with `docker run --env-file .env ...`, ensuring
 the database hostname is reachable from the container.
