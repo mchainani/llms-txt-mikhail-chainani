@@ -1,6 +1,7 @@
 """HTTP request and response schemas."""
 
 from datetime import datetime, timedelta
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
@@ -14,6 +15,17 @@ class FetchPageRequest(BaseModel):
 
     url: HttpUrl
     cron_expression: str | None = None
+    crawler: Literal["beautifulsoup", "playwright"] | None = Field(
+        default=None, description="Crawler engine. Defaults to beautifulsoup."
+    )
+    render_wait_seconds: float | None = Field(
+        default=None,
+        ge=0,
+        le=60,
+        allow_inf_nan=False,
+        strict=True,
+        description="Extra wait after DOMContentLoaded in Playwright mode; defaults to 1 second.",
+    )
     max_pages: int | None = Field(
         default=None,
         gt=0,

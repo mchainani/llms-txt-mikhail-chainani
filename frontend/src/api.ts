@@ -1,3 +1,5 @@
+export type CrawlerType = 'beautifulsoup' | 'playwright';
+
 export interface RequestInfo {
   id: string;
   url: string;
@@ -67,12 +69,12 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
   return response.json() as Promise<T>;
 }
 
-export function createRequest(url: string, cron: string, timeout = '', maxPages = ''): Promise<RequestInfo> {
+export function createRequest(url: string, cron: string, timeout = '', maxPages = '', crawler: CrawlerType = 'beautifulsoup'): Promise<RequestInfo> {
   return api(requestsPath, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      url: url.trim(), cron_expression: cron.trim() || null,
+      url: url.trim(), cron_expression: cron.trim() || null, crawler,
       ...(timeout.trim() ? { fetch_timeout_seconds: Number(timeout) } : {}),
       ...(maxPages.trim() ? { max_pages: Number(maxPages) } : {}),
     }),

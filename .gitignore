@@ -31,3 +31,6 @@ coverage/
 .DS_Store
 *.log
 .neon
+
+# Reproducible crawler comparison artifacts
+backend/demo-output/

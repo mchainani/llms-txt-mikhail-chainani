@@ -36,6 +36,18 @@ main { max-width: 1264px; min-height: calc(100vh - 164px); padding: 54px 40px 40
 .panel-heading p { color: #607467; margin-top: 5px; font-size: 13px; }
 .section-icon { display: grid; place-items: center; color: #147d68; width: 38px; height: 38px; background: #eef6f2; border-radius: 9px; font-size: 23px; }
 .form-fields { display: grid; grid-template-columns: 1.55fr 1fr 1fr; gap: 24px; }
+.url-field { grid-column: 1 / -1; }
+.site-type-field { grid-column: 1 / -1; border: 0; padding: 0; margin: 0; min-width: 0; }
+.site-type-field legend { padding: 0; margin-bottom: 10px; font-size: 12px; font-weight: 600; }
+.site-type-options { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.site-type-option { display: flex; align-items: flex-start; gap: 12px; padding: 16px; border: 1px solid #dce4de; border-radius: 8px; cursor: pointer; }
+.site-type-option:hover { border-color: #aebeb4; }
+.site-type-option.selected { border-color: #147d68; background: #f3f9f6; }
+.site-type-option:focus-within { outline: 2px solid #147d68; outline-offset: 2px; }
+.site-type-option input { flex: 0 0 16px; width: 16px; min-height: 16px; height: 16px; padding: 0; margin: 1px 0 0; accent-color: #147d68; }
+.site-type-option strong { display: block; font-size: 12px; font-weight: 600; }
+.site-type-description { display: block; color: #607467; font-size: 11px; line-height: 1.6; margin-top: 6px; }
+.site-type-field:disabled .site-type-option { cursor: default; opacity: .65; }
 .field label { display: block; margin-bottom: 10px; font-size: 12px; font-weight: 600; }
 .optional { margin-left: 6px; color: #607467; font-size: 11px; font-weight: 400; }
 input { width: 100%; min-height: 46px; padding: 12px 14px; color: #203730; border: 1px solid #dce4de; border-radius: 6px; background: #fff; transition: border-color .15s; }
@@ -127,6 +139,7 @@ pre code { font-size: inherit; }
   .url-field { grid-column: 1 / -1; }
 }
 @media (max-width: 540px) {
+  .site-type-options { grid-template-columns: 1fr; }
   .app-header { height: 68px; }
   .header-inner { padding: 0 20px; gap: 32px; }
   .brand { font-size: 22px; }
