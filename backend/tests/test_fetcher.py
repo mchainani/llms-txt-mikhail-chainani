@@ -49,8 +49,8 @@ def fetching(monkeypatch, handler):
     )
     monkeypatch.setattr(httpx, "AsyncHTTPTransport", lambda **kwargs: httpx.MockTransport(handler))
 
-    def fetch(url):
-        return anyio.run(fetch_page, url)
+    def fetch(url, configs=None):
+        return anyio.run(fetch_page, url, configs)
 
     yield fetch
 
@@ -436,18 +436,44 @@ def test_recovers_from_malformed_base_url(monkeypatch):
     assert result_urls(response) == ["https://example.com/docs/", "https://example.com/docs/start"]
 
 
-def test_total_deadline_covers_a_slow_response(monkeypatch):
+@pytest.mark.parametrize(
+    "configs, default",
+    [
+        (None, 0.01),
+        ("{}", 0.01),
+        ('{"fetch_timeout_seconds": null}', 0.01),
+        ('{"fetch_timeout_seconds": 0.01}', 60),
+        ('{"fetch_timeout_seconds": 1e-10}', 60),
+    ],
+)
+def test_total_deadline_covers_a_slow_response(monkeypatch, configs, default):
     from llms_txt_gen.crawling import fetcher
 
     async def upstream(request):
         await anyio.sleep(1)
         return html_response("")
 
-    monkeypatch.setattr(fetcher, "FETCH_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(fetcher, "FETCH_TIMEOUT_SECONDS", default)
     with fetching(monkeypatch, upstream) as fetch:
         with pytest.raises(FetchError) as error:
-            fetch("https://example.com/")
+            fetch("https://example.com/", configs)
     assert error.value.status_code == 504
+
+
+@pytest.mark.parametrize(
+    "configs", ['{"fetch_timeout_seconds": 2}', '{"fetch_timeout_seconds": 43199999999999}']
+)
+def test_request_timeout_can_extend_default_deadline(monkeypatch, configs):
+    from llms_txt_gen.crawling import fetcher
+
+    async def upstream(request):
+        await anyio.sleep(0.05)
+        return html_response("<title>Slow page</title>")
+
+    monkeypatch.setattr(fetcher, "FETCH_TIMEOUT_SECONDS", 0.01)
+    with fetching(monkeypatch, upstream) as fetch:
+        response = fetch("https://example.com/", configs)
+    assert response.results[0].title == "Slow page"
 
 
 def test_handles_dns_failure(monkeypatch):

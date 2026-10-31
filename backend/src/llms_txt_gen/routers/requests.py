@@ -1,5 +1,6 @@
 """Create, inspect, and delete persisted llms.txt requests."""
 
+import json
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Response
@@ -15,7 +16,13 @@ router = APIRouter(prefix="/llms-txt/requests", tags=["requests"])
 @router.post("", response_model=RequestInfo, status_code=201)
 async def create_request(payload: FetchPageRequest, connection: DatabaseConnection) -> RequestInfo:
     row = await RequestRepository(connection).create(
-        url=str(payload.url), cron_expression=payload.cron_expression
+        url=str(payload.url),
+        cron_expression=payload.cron_expression,
+        configs=(
+            json.dumps({"fetch_timeout_seconds": payload.fetch_timeout_seconds})
+            if payload.fetch_timeout_seconds is not None
+            else None
+        ),
     )
     return RequestInfo.model_validate(row, from_attributes=True)
 

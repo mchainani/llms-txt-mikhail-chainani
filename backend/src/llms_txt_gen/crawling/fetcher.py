@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import os
 from datetime import timedelta
@@ -30,15 +31,22 @@ FETCH_TIMEOUT_SECONDS = float(os.environ.get("FETCH_TIMEOUT_SECONDS", "600"))
 logger = logging.getLogger(__name__)
 
 
-async def fetch_page(url: str) -> CrawlResponse:
+async def fetch_page(url: str, configs: str | None = None) -> CrawlResponse:
     """Own each crawl's HTTP resources on the caller's event loop."""
     async with create_http_client() as client:
-        return await _crawl_page(client, url)
+        return await _crawl_page(client, url, configs)
 
 
-async def _crawl_page(client: httpx.AsyncClient, url: str) -> CrawlResponse:
+async def _crawl_page(
+    client: httpx.AsyncClient, url: str, configs: str | None = None
+) -> CrawlResponse:
     """Recursively crawl normalized links on the original requested hostname."""
     requested_url = normalize_url(url)
+    timeout_seconds = (json.loads(configs) if configs is not None else {}).get(
+        "fetch_timeout_seconds"
+    )
+    if timeout_seconds is None:
+        timeout_seconds = FETCH_TIMEOUT_SECONDS
     results: dict[str, PageResult] = {}
     failure = None
     storage_client = MemoryStorageClient()
@@ -59,7 +67,7 @@ async def _crawl_page(client: httpx.AsyncClient, url: str) -> CrawlResponse:
         retry_on_blocked=False,
         configure_logging=False,
         concurrency_settings=ConcurrencySettings(max_concurrency=1, desired_concurrency=1),
-        request_handler_timeout=timedelta(seconds=FETCH_TIMEOUT_SECONDS),
+        request_handler_timeout=timedelta(seconds=timeout_seconds),
     )
 
     @crawler.router.default_handler
@@ -92,15 +100,18 @@ async def _crawl_page(client: httpx.AsyncClient, url: str) -> CrawlResponse:
         if context.request.unique_key == requested_url:
             failure = error
 
-    deadline = asyncio.timeout(FETCH_TIMEOUT_SECONDS)
+    deadline = asyncio.timeout(timeout_seconds)
     try:
         async with deadline:
             await crawler.run([Request.from_url(requested_url, unique_key=requested_url)])
             if task := asyncio.current_task():
                 if task.cancelling():
                     raise asyncio.CancelledError
-    except TimeoutError as exc:
-        raise FetchError(504, "The upstream page timed out.") from exc
+    except Exception as exc:
+        # Cancellation during Crawlee startup can surface as a statistics error.
+        if isinstance(exc, TimeoutError) or deadline.expired():
+            raise FetchError(504, "The upstream page timed out.") from exc
+        raise
     finally:
         await queue.drop()
     # Crawlee can consume cancellation while stopping a run; retain our deadline.

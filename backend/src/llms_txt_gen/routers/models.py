@@ -1,9 +1,9 @@
 """HTTP request and response schemas."""
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, HttpUrl, field_validator
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
 
 from llms_txt_gen.cron import next_cron_time
 from llms_txt_gen.urls import normalize_url
@@ -14,6 +14,15 @@ class FetchPageRequest(BaseModel):
 
     url: HttpUrl
     cron_expression: str | None = None
+    fetch_timeout_seconds: float | None = Field(
+        default=None,
+        gt=0,
+        # Crawlee doubles this duration for its internal timeout.
+        le=(timedelta.max // 2).total_seconds() - 1,
+        allow_inf_nan=False,
+        strict=True,
+        description="Total crawl timeout in seconds. Omit to use the server default.",
+    )
 
     @field_validator("cron_expression")
     @classmethod
@@ -42,6 +51,7 @@ class RequestInfo(BaseModel):
     timestamp: datetime
     job_id: str | None
     cron_expression: str | None
+    configs: str | None
 
 
 class FileInfo(BaseModel):

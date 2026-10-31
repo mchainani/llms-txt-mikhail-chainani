@@ -170,6 +170,21 @@ describe('request workflow', () => {
     },
   );
 
+  it.each(['120', '0.5'])('submits fetch timeout %s in seconds', async (timeout) => {
+    const fetcher = serve();
+    const user = userEvent.setup();
+    open();
+    await user.click(screen.getByRole('button', { name: 'New request' }));
+    await user.type(screen.getByLabelText('Website URL'), 'https://example.com/');
+    await user.type(screen.getByLabelText(/Fetch timeout/), timeout);
+    await user.click(screen.getByRole('button', { name: 'Create request' }));
+    expect(await screen.findByRole('heading', { name: 'Request runs' })).toBeInTheDocument();
+    const post = fetcher.mock.calls.find(([, options]) => options?.method === 'POST');
+    expect(JSON.parse(post?.[1]?.body as string)).toEqual({
+      url: 'https://example.com/', cron_expression: null, fetch_timeout_seconds: Number(timeout),
+    });
+  });
+
   it('shows backend cron validation without losing the entered values', async () => {
     serve();
     vi.stubGlobal('fetch', vi.fn(async (_input: string, options?: RequestInit) =>

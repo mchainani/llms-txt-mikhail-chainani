@@ -290,6 +290,44 @@ def test_worker_generates_logs_and_marks_success(
     )
 
 
+@pytest.mark.parametrize(
+    "timeout, default, expected_status", [(0.01, 600, "pending"), (2, 0.01, "success")]
+)
+def test_worker_uses_persisted_timeout(
+    runs_client, run_database, upstream, monkeypatch, run_queue, timeout, default, expected_status
+):
+    from llms_txt_gen.crawling import fetcher
+
+    async def handle(request):
+        await anyio.sleep(0.05)
+        return httpx.Response(
+            200, text="<title>Slow page</title>", headers={"content-type": "text/html"}
+        )
+
+    monkeypatch.setattr(fetcher, "FETCH_TIMEOUT_SECONDS", default)
+    monkeypatch.setattr(httpx, "AsyncHTTPTransport", lambda **kwargs: httpx.MockTransport(handle))
+    response = runs_client.post(
+        "/llms-txt/requests",
+        json={"url": "https://example.com/", "fetch_timeout_seconds": timeout},
+    )
+    assert response.status_code == 201
+    request_id = response.json()["id"]
+    run_queue()
+    record = runs_client.get(f"/llms-txt/requests/{request_id}/runs/latest").json()
+    assert record["status"] == expected_status
+    files = run_database.execute("SELECT content FROM llms_txt_files").fetchall()
+    if expected_status == "success":
+        assert len(files) == 1
+        assert files[0]["content"].startswith("# Slow page\n")
+    else:
+        assert files == []
+        job = run_database.execute(
+            "SELECT status, attempts FROM procrastinate_jobs "
+            "WHERE task_name = 'process_llms_txt_run'"
+        ).fetchone()
+        assert job == {"status": "todo", "attempts": 1}
+
+
 def test_worker_counts_successful_crawl_results(
     request_id, runs_client, run_database, upstream, monkeypatch, run_queue
 ):

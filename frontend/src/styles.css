@@ -35,7 +35,7 @@ main { max-width: 1264px; min-height: calc(100vh - 164px); padding: 54px 40px 40
 .panel-heading { display: flex; gap: 13px; align-items: center; margin-bottom: 28px; }
 .panel-heading p { color: #607467; margin-top: 5px; font-size: 13px; }
 .section-icon { display: grid; place-items: center; color: #147d68; width: 38px; height: 38px; background: #eef6f2; border-radius: 9px; font-size: 23px; }
-.form-fields { display: grid; grid-template-columns: 1.55fr 1fr; gap: 24px; }
+.form-fields { display: grid; grid-template-columns: 1.55fr 1fr 1fr; gap: 24px; }
 .field label { display: block; margin-bottom: 10px; font-size: 12px; font-weight: 600; }
 .optional { margin-left: 6px; color: #607467; font-size: 11px; font-weight: 400; }
 input { width: 100%; min-height: 46px; padding: 12px 14px; color: #203730; border: 1px solid #dce4de; border-radius: 6px; background: #fff; transition: border-color .15s; }
@@ -121,6 +121,10 @@ pre code { font-size: inherit; }
   .request-summary { grid-template-columns: 1fr 1fr; }
   .request-summary > :first-child { grid-column: 1 / -1; }
   td, th { padding-left: 20px; padding-right: 20px; }
+}
+@media (max-width: 900px) {
+  .form-fields { grid-template-columns: 1fr 1fr; }
+  .url-field { grid-column: 1 / -1; }
 }
 @media (max-width: 540px) {
   .app-header { height: 68px; }

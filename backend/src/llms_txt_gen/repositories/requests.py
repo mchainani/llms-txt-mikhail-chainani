@@ -14,7 +14,7 @@ from llms_txt_gen.repositories.runs import RunRepository
 
 class RequestRepository(Repository[Request]):
     table = "llms_txt_requests"
-    columns = ("id", "url", "created_at", "timestamp", "job_id", "cron_expression")
+    columns = ("id", "url", "created_at", "timestamp", "job_id", "cron_expression", "configs")
     mutable_columns = ("job_id",)
     order_by = ("created_at", "id")
     entity_type = Request
@@ -38,6 +38,7 @@ class RequestRepository(Repository[Request]):
         url: str,
         job_id: str | None = None,
         cron_expression: str | None = None,
+        configs: str | None = None,
         id: UUID | None = None,
     ) -> Request:
         """Create a request and its missing processing job at the next cron time or now."""
@@ -52,6 +53,7 @@ class RequestRepository(Repository[Request]):
                     "url": url,
                     "job_id": job_id,
                     "cron_expression": cron_expression,
+                    "configs": configs,
                 }
             )
 

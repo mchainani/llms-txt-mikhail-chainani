@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, datetime
 from functools import partial
 from uuid import UUID, uuid4
@@ -15,7 +16,7 @@ def requests_client(run_database):
         yield client
 
 
-@pytest.mark.parametrize("extra", [{}, {"cron_expression": None}])
+@pytest.mark.parametrize("extra", [{}, {"cron_expression": None}, {"fetch_timeout_seconds": None}])
 def test_create_request_without_cron_enqueues_immediate_request_job(
     requests_client, run_database, extra
 ):
@@ -32,8 +33,10 @@ def test_create_request_without_cron_enqueues_immediate_request_job(
         "timestamp",
         "job_id",
         "cron_expression",
+        "configs",
     }
     assert record["cron_expression"] is None
+    assert record["configs"] is None
     assert record["job_id"] is not None
     request_id = UUID(record["id"])
     assert record["url"] == "https://example.com/docs?a=1&z=2"
@@ -152,6 +155,7 @@ def test_list_requests_returns_empty_list_and_all_records_newest_first(
         "timestamp": "2026-01-02T00:00:00Z",
         "job_id": None,
         "cron_expression": None,
+        "configs": None,
     }
 
 
@@ -184,4 +188,34 @@ def test_invalid_create_request_does_not_persist(requests_client, run_database, 
     assert response.status_code == 422
     assert run_database.execute("SELECT id FROM llms_txt_requests").fetchall() == []
     assert run_database.execute("SELECT id FROM llms_txt_runs").fetchall() == []
+    assert run_database.execute("SELECT id FROM procrastinate_jobs").fetchall() == []
+
+
+@pytest.mark.parametrize("timeout", [1, 120, 0.5])
+def test_request_timeout_persists_as_json_text(requests_client, run_database, timeout):
+    response = requests_client.post(
+        "/llms-txt/requests",
+        json={"url": "https://example.com/", "fetch_timeout_seconds": timeout},
+    )
+    assert response.status_code == 201
+    record = response.json()
+    stored = run_database.execute(
+        "SELECT configs, pg_typeof(configs)::text AS type FROM llms_txt_requests WHERE id = %s",
+        (record["id"],),
+    ).fetchone()
+    assert stored["type"] == "text"
+    assert json.loads(stored["configs"]) == {"fetch_timeout_seconds": timeout}
+    assert record["configs"] == stored["configs"]
+    assert requests_client.get(f"/llms-txt/requests/{record['id']}").json() == record
+    assert requests_client.get("/llms-txt/requests").json() == [record]
+
+
+@pytest.mark.parametrize("timeout", [0, -1, 5e13, 1e20, 1e308, True, "120", "nan", "inf", {}, []])
+def test_invalid_timeout_does_not_persist(requests_client, run_database, timeout):
+    response = requests_client.post(
+        "/llms-txt/requests",
+        json={"url": "https://example.com/", "fetch_timeout_seconds": timeout},
+    )
+    assert response.status_code == 422
+    assert run_database.execute("SELECT id FROM llms_txt_requests").fetchall() == []
     assert run_database.execute("SELECT id FROM procrastinate_jobs").fetchall() == []

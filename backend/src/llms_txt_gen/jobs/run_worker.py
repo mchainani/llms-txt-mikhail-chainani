@@ -56,7 +56,7 @@ async def process_run(context: JobContext, run_id: str) -> None:
     from llms_txt_gen.crawling.fetcher import fetch_page
     from llms_txt_gen.generation.generator import build_document, render_document
 
-    crawl_results = await fetch_page(request.url)
+    crawl_results = await fetch_page(request.url, request.configs)
     document = build_document(crawl_results)
     llms_txt = render_document(document)
 

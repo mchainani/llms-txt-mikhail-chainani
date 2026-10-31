@@ -13,6 +13,7 @@ class Request:
     timestamp: datetime
     job_id: str | None = None
     cron_expression: str | None = None
+    configs: str | None = None
 
 
 @dataclass(frozen=True)

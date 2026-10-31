@@ -182,16 +182,24 @@ Create a request with:
 ```bash
 curl -X POST http://127.0.0.1:8000/llms-txt/requests \
   -H 'Content-Type: application/json' \
-  -d '{"url":"https://example.com/"}'
+  -d '{"url":"https://example.com/","fetch_timeout_seconds":120}'
 ```
 
 The response is HTTP 201 with `id`, normalized `url`, `created_at`, `timestamp`,
-nullable `cron_expression`, and nullable `job_id`. Creating a request enqueues a
+nullable `cron_expression`, nullable `configs`, and nullable `job_id`. Creating a request enqueues a
 `process_llms_txt_request` job and saves its ID in the same transaction. The job
 is scheduled at the next cron time when a cron expression is set, or immediately
 otherwise.
 The endpoint does not create a run; the worker creates it when processing the job.
 Without a cron expression (omitted or `null`), processing runs once.
+
+The optional `fetch_timeout_seconds` field sets the total crawl deadline and page
+handler timeout for every run of the request. It must be a positive, finite JSON
+number within Crawlee's duration range (at most 43,199,999,999,999 seconds); fractional
+seconds are supported. Omit it or pass `null` to use `FETCH_TIMEOUT_SECONDS`
+(600 seconds by default). The request's nullable `configs` TEXT column stores
+`{"fetch_timeout_seconds":120.0}` as JSON text; responses expose that JSON text
+in `configs`. Existing requests retain `configs=NULL` and use the default.
 
 To schedule recurring generation, include `cron_expression`:
 
@@ -331,6 +339,9 @@ docker exec -i llms-txt-postgres \
 docker exec -i llms-txt-postgres \
   psql -U app_dev -d llms_txt_dev -v ON_ERROR_STOP=1 --single-transaction \
   < migrations/005_add_run_num_links.sql
+docker exec -i llms-txt-postgres \
+  psql -U app_dev -d llms_txt_dev -v ON_ERROR_STOP=1 --single-transaction \
+  < migrations/006_add_request_configs.sql
 ```
 
 This creates `public.llms_txt_requests`, `public.llms_txt_runs`, and
@@ -348,6 +359,8 @@ text `status` to requests; existing requests receive `cron_expression=NULL` and
 no status field; run status continues to track generation progress.
 `005_add_run_num_links.sql` adds nullable integer `num_links` to runs; existing
 runs retain `num_links=NULL` until explicitly updated.
+`006_add_request_configs.sql` adds nullable TEXT `configs` to requests for JSON
+configuration, including per-request `fetch_timeout_seconds`.
 
 ## Background crawling
 
