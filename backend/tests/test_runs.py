@@ -330,7 +330,7 @@ def test_worker_uses_persisted_timeout(
         assert job == {"status": "todo", "attempts": 1}
 
 
-def test_worker_counts_successful_crawl_results(
+def test_worker_counts_all_retained_crawl_results(
     request_id, runs_client, run_database, upstream, monkeypatch, run_queue
 ):
     def handle(request):
@@ -354,19 +354,20 @@ def test_worker_counts_successful_crawl_results(
 
     record = runs_client.get(f"/llms-txt/requests/{request_id}/runs/{run_id}").json()
     assert record["status"] == "success"
-    assert record["num_links"] == 3
+    assert record["num_links"] == 4
     assert runs_client.get(f"/llms-txt/requests/{request_id}/runs/latest").json() == record
     assert runs_client.get(f"/llms-txt/requests/{request_id}/runs").json() == [record]
     stored = run_database.execute(
         "SELECT num_links FROM llms_txt_runs WHERE id = %s", (run_id,)
     ).fetchone()
-    assert stored["num_links"] == 3
+    assert stored["num_links"] == 4
     file = run_database.execute("SELECT content FROM llms_txt_files").fetchone()
     assert file["content"] == (
         "# Example\n\n> A useful site.\n\n## Pages\n\n"
         "- [Example](https://example.com/): A useful site.\n"
         "- [Guide](https://example.com/guide): Read this.\n"
         "\n## Optional\n\n- [About](https://example.com/about)\n"
+        "- [/missing](https://example.com/missing)\n"
     )
 
 
@@ -567,7 +568,7 @@ def test_generation_failure_retries_after_30_seconds(
     monkeypatch.setattr(
         httpx,
         "AsyncHTTPTransport",
-        lambda **kwargs: httpx.MockTransport(lambda request: httpx.Response(404)),
+        lambda **kwargs: httpx.MockTransport(lambda request: httpx.Response(503)),
     )
     run_queue()
     assert (

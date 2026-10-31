@@ -177,18 +177,25 @@ def test_recurses_through_cycles_and_deduplicates_normalized_urls(monkeypatch):
     assert Counter(visits) == {"/": 1, "/a": 1, "/b?a=1&z=2": 1, "/leaf": 1}
 
 
-def test_failed_linked_pages_do_not_discard_successful_results(monkeypatch):
+@pytest.mark.parametrize("status", [400, 401, 403, 404, 413, 415, 429, 499])
+def test_client_errors_are_retained_while_other_pages_are_crawled(monkeypatch, status):
 
     def upstream(request):
         if request.url.path == "/":
             return html_response('<a href="/missing">Missing</a><a href="/ok">OK</a>')
         if request.url.path == "/missing":
-            return httpx.Response(404)
+            return httpx.Response(status)
         return html_response("<title>OK</title>")
 
     with fetching(monkeypatch, upstream) as fetch:
         response = fetch("https://example.com/")
-    assert result_urls(response) == ["https://example.com/", "https://example.com/ok"]
+    pages = {page.url: page for page in response.results}
+    assert set(pages) == {
+        "https://example.com/", "https://example.com/missing", "https://example.com/ok"
+    }
+    assert pages["https://example.com/missing"].title is None
+    assert pages["https://example.com/missing"].description is None
+    assert pages["https://example.com/ok"].title == "OK"
 
 
 def test_redirect_aliases_produce_unique_final_urls(monkeypatch):
@@ -203,3 +210,19 @@ def test_redirect_aliases_produce_unique_final_urls(monkeypatch):
     with fetching(monkeypatch, upstream) as fetch:
         response = fetch("https://example.com/")
     assert result_urls(response) == ["https://example.com/", "https://example.com/new"]
+
+
+def test_non_html_linked_page_is_skipped_while_crawling_continues(monkeypatch, caplog):
+    def upstream(request):
+        if request.url.path == "/":
+            return html_response('<a href="/download">Download</a><a href="/ok">OK</a>')
+        if request.url.path == "/download":
+            return httpx.Response(200, headers={"content-type": "application/pdf"})
+        return html_response("<title>OK</title>")
+
+    with fetching(monkeypatch, upstream) as fetch:
+        response = fetch("https://example.com/")
+
+    assert result_urls(response) == ["https://example.com/", "https://example.com/ok"]
+    assert response.results[1].title == "OK"
+    assert not any(record.levelname == "ERROR" for record in caplog.records)

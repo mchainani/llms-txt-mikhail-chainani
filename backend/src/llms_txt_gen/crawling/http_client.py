@@ -13,7 +13,7 @@ from crawlee.http_clients import HttpClient, HttpCrawlingResult
 
 from llms_txt_gen.urls import normalize_url
 
-MAX_HTML_BYTES = 2 * 1024 * 1024
+MAX_HTML_BYTES = 4 * 1024 * 1024
 MAX_REDIRECTS = 5
 REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 
@@ -36,11 +36,15 @@ def create_http_client() -> httpx.AsyncClient:
 
 
 class FetchError(Exception):
-    def __init__(self, status_code: int, detail: str, *, retryable: bool = False) -> None:
+    def __init__(
+        self, status_code: int, detail: str, *, retryable: bool = False, url: str | None = None
+    ) -> None:
         super().__init__(detail)
         self.status_code = status_code
         self.detail = detail
         self.retryable = retryable
+        # Only response failures have a URL; validation errors must still fail the crawl.
+        self.url = url
 
 
 def resolve_public_address(url: httpx.URL) -> str:
@@ -93,17 +97,23 @@ class PublicHtmlTransport(httpx.AsyncBaseTransport):
                 return httpx.Response(response.status_code, headers=response.headers)
             if not response.is_success:
                 raise FetchError(
-                    502,
+                    response.status_code if response.is_client_error else 502,
                     f"The upstream server returned HTTP {response.status_code}.",
                     retryable=response.status_code == 429 or response.status_code >= 500,
+                    url=str(request.url),
                 )
             media_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
             if media_type not in {"text/html", "application/xhtml+xml"}:
-                raise FetchError(415, "The upstream response must be HTML or XHTML.")
+                # Let the page handler skip this response without reading its body.
+                return httpx.Response(
+                    response.status_code, headers={"content-type": media_type}, content=b""
+                )
             body = bytearray()
             async for chunk in response.aiter_bytes(chunk_size=16 * 1024):
                 if len(body) + len(chunk) > MAX_HTML_BYTES:
-                    raise FetchError(413, "The upstream HTML exceeds the 2 MiB limit.")
+                    raise FetchError(
+                        413, "The upstream HTML exceeds the 4 MiB limit.", url=str(request.url)
+                    )
                 body.extend(chunk)
             headers = response.headers.copy()
             # The stream is already decompressed. Preserve charset and other headers.

@@ -22,7 +22,7 @@ def _markdown_text(value: str) -> str:
 
 
 def build_document(crawl: CrawlResponse, *, title: str | None = None) -> LlmsTxtDocument:
-    """List successful pages once, sorted by normalized URL; first duplicate wins.
+    """List retained pages once, sorted by normalized URL; first duplicate wins.
 
     The crawler returns the starting page first, including after a redirect.
     Pages missing a title or description go in Optional. URL paths supply

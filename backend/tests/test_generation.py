@@ -34,7 +34,26 @@ def test_crawls_and_generates_llms_txt(monkeypatch):
 
 
 def test_generation_preserves_fetch_errors(monkeypatch):
-    with fetching(monkeypatch, lambda request: httpx.Response(404)):
+    with fetching(monkeypatch, lambda request: httpx.Response(503)):
         with pytest.raises(FetchError) as error:
             anyio.run(fetch_page, "https://example.com/")
     assert error.value.status_code == 502
+
+
+def test_client_error_links_appear_in_optional_section(monkeypatch):
+    def upstream(request):
+        if request.url.path == "/":
+            return html_response(
+                '<title>Docs</title><meta name="description" content="Start here.">'
+                '<a href="/blocked">Blocked</a><a href="/guide">Guide</a>'
+            )
+        if request.url.path == "/blocked":
+            return httpx.Response(403, text="<title>Challenge</title>")
+        return html_response('<title>Guide</title><meta name="description" content="Read me.">')
+
+    with fetching(monkeypatch, upstream):
+        markdown = render_document(build_document(anyio.run(fetch_page, "https://example.com/")))
+
+    assert "- [Guide](https://example.com/guide): Read me." in markdown
+    assert markdown.endswith("## Optional\n\n- [/blocked](https://example.com/blocked)\n")
+    assert "Challenge" not in markdown

@@ -305,10 +305,7 @@ def test_rejects_private_redirect_destination(monkeypatch):
 @pytest.mark.parametrize(
     ("upstream_response", "expected"),
     [
-        (httpx.Response(404), 502),
         (httpx.Response(503), 502),
-        (httpx.Response(200, headers={"content-type": "application/pdf"}), 415),
-        (httpx.Response(200), 415),
         (httpx.Response(302, headers={"location": "/loop"}), 502),
         (httpx.Response(302), 502),
     ],
@@ -334,14 +331,15 @@ def test_handles_network_failures(monkeypatch, error_type, expected):
     assert error.value.status_code == expected
 
 
-def test_retries_a_temporary_upstream_failure(monkeypatch):
+@pytest.mark.parametrize("status", [429, 503])
+def test_retries_a_temporary_upstream_failure(monkeypatch, status):
     attempts = 0
 
     def upstream(request):
         nonlocal attempts
         attempts += 1
         if attempts == 1:
-            return httpx.Response(503)
+            return httpx.Response(status)
         return html_response("<title>Recovered docs</title>")
 
     with fetching(monkeypatch, upstream) as fetch:
@@ -369,11 +367,69 @@ def test_repeated_calls_to_the_same_url_are_independent(monkeypatch):
     assert calls == 2
 
 
-def test_rejects_oversized_html(monkeypatch):
-    with fetching(monkeypatch, lambda request: html_response("x" * (2 * 1024 * 1024 + 1))) as fetch:
-        with pytest.raises(FetchError) as error:
-            fetch("https://example.com/")
-    assert error.value.status_code == 413
+def test_accepts_html_at_four_mib_limit(monkeypatch):
+    html = "<title>Large page</title>".ljust(4 * 1024 * 1024)
+    with fetching(monkeypatch, lambda request: html_response(html)) as fetch:
+        response = fetch("https://example.com/")
+    assert response.results[0].title == "Large page"
+
+
+@pytest.mark.parametrize(
+    "upstream_response",
+    [
+        httpx.Response(403, text='<title>Blocked</title><a href="/challenge">Challenge</a>'),
+        httpx.Response(404),
+        httpx.Response(429),
+        html_response("<title>Too large</title>".ljust(4 * 1024 * 1024 + 1)),
+    ],
+)
+def test_retains_unreadable_starting_page_with_null_metadata(monkeypatch, upstream_response):
+    calls = []
+
+    def upstream(request):
+        calls.append(request.url.path)
+        return upstream_response
+
+    with fetching(monkeypatch, upstream) as fetch:
+        response = fetch("https://example.com/")
+    assert response.results[0].model_dump() == {
+        "url": "https://example.com/", "title": None, "description": None
+    }
+    assert calls == ["/"] * (3 if upstream_response.status_code == 429 else 1)
+
+
+def test_retains_final_redirect_url_for_unreadable_page(monkeypatch):
+    def upstream(request):
+        if request.url.path == "/":
+            return httpx.Response(302, headers={"location": "/blocked"})
+        return httpx.Response(403)
+
+    with fetching(monkeypatch, upstream) as fetch:
+        response = fetch("https://example.com/")
+    assert response.results[0].model_dump() == {
+        "url": "https://example.com/blocked", "title": None, "description": None
+    }
+
+
+@pytest.mark.parametrize("media_type", [None, "application/pdf", "text/plain"])
+@pytest.mark.parametrize("redirect", [False, True])
+def test_non_html_starting_page_is_skipped_without_errors(
+    monkeypatch, caplog, media_type, redirect
+):
+    def upstream(request):
+        if redirect and request.url.path == "/":
+            return httpx.Response(302, headers={"location": "/download"})
+        return httpx.Response(
+            200,
+            content=b'<title>Not HTML</title><a href="/ignored">Ignore</a>',
+            headers={"content-type": media_type} if media_type else {},
+        )
+
+    with fetching(monkeypatch, upstream) as fetch:
+        response = fetch("https://example.com/")
+
+    assert response.model_dump() == {"requested_url": "https://example.com/", "results": []}
+    assert not any(record.levelname == "ERROR" for record in caplog.records)
 
 
 def test_preserves_declared_html_encoding(monkeypatch):

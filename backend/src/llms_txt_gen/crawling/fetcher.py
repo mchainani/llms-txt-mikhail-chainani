@@ -58,6 +58,7 @@ async def _crawl_page(
     deadline_at = asyncio.get_running_loop().time() + timeout_seconds
     results: dict[str, PageResult] = {}
     failure = None
+    starting_page_skipped = False
     storage_client = MemoryStorageClient()
     configuration = Configuration(purge_on_start=False)
     queue = await RequestQueue.open(
@@ -83,8 +84,15 @@ async def _crawl_page(
 
     @crawler.router.default_handler
     async def handle_page(context: BeautifulSoupCrawlingContext) -> None:
+        nonlocal starting_page_skipped
         response = cast(HtmlResponse, context.http_response).response
         final_url = normalize_url(context.request.loaded_url or requested_url)
+        media_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+        if media_type not in {"text/html", "application/xhtml+xml"}:
+            if context.request.unique_key == requested_url:
+                starting_page_skipped = True
+            logger.info("Skipped page %s (content_type=%s)", final_url, media_type or "missing")
+            return
         page, links = await anyio.to_thread.run_sync(
             extract_page, response.text, final_url, context.soup, requested_url
         )
@@ -106,6 +114,12 @@ async def _crawl_page(
     @crawler.failed_request_handler
     async def handle_failure(context, error: Exception) -> None:
         nonlocal failure
+        if isinstance(error, FetchError) and 400 <= error.status_code < 500 and error.url:
+            results.setdefault(error.url, PageResult(url=error.url, title=None, description=None))
+            logger.info(
+                "Retained page %s without metadata (status=%s)", error.url, error.status_code
+            )
+            return
         if context.request.unique_key == requested_url:
             failure = error
 
@@ -128,7 +142,7 @@ async def _crawl_page(
         raise FetchError(504, "The upstream page timed out.")
     if isinstance(failure, FetchError):
         raise failure
-    if not results:
+    if not results and not starting_page_skipped:
         raise FetchError(502, "Crawlee could not fetch the upstream page.") from failure
     # Different queued aliases may redirect to one final URL. Deduplicate output
     # only; Crawlee's unique keys handle scheduling and cycles without a visited set.

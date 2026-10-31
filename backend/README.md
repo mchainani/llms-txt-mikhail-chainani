@@ -248,8 +248,9 @@ curl http://127.0.0.1:8000/llms-txt/requests/REQUEST_UUID/runs/RUN_UUID/files
 
 Run responses include `id`, `request_id`, `status`, `file_id`, `created_at`,
 `timestamp`, nullable `job_id`, nullable integer `num_links`, and integer
-`retry_count`. Successful runs save `num_links` as the number of successful pages in the crawl results, including the
-starting page, in the same transaction as the generated file and success status.
+`retry_count`. Successful runs save `num_links` as the number of retained links in
+the crawl results, including the starting page and links retained without metadata
+after 4xx fetch failures, in the same transaction as the generated file and success status.
 `latest` returns the run with the newest
 `created_at` for that request, regardless of status; a request with no runs
 returns HTTP 404 for `latest`.
@@ -394,15 +395,23 @@ generation endpoints.
 - Preserve query parameter values. Skip empty hrefs, fragment-only links, embedded
   credentials, malformed URLs, and schemes such as `mailto:`, `tel:`, and `javascript:`.
 - Return the normalized starting `requested_url` and a `results` array of
-  successfully crawled HTML pages. The starting page is always first, using its
+  crawled pages and links retained after 4xx fetch failures. Unless skipped for a non-HTML
+  media type, the starting page is always first, using its
   final URL after redirects; remaining pages follow completion order. Each result contains
   only its normalized final `url`, `title`, and `description`. Missing titles
   and descriptions are `null`. Extracted links are used internally for crawling.
 - Different aliases can redirect to the same final URL. They are distinct queue
   keys and may cause repeated fetches of that destination, but it appears only
   once in the response. Redirect destinations still undergo public-address checks.
-- Skip failed linked pages after their retries, retaining successful results.
-  A failed starting page raises `FetchError`. If the overall crawl deadline
+- Retain upstream HTTP 4xx responses and local 413 failures as links with
+  `title=null` and `description=null`, including the starting page. Do not extract
+  metadata or links from error responses. Continue crawling other queued pages.
+  HTTP 429 is retried before retaining the link. Unsafe URLs are still rejected.
+- Skip successful responses whose media type is neither HTML nor XHTML, including
+  missing content types. Do not read their bodies or include them in the results.
+  A non-HTML starting page returns an empty results array without failing the crawl.
+- Skip linked pages with other fetch failures after their retries, retaining other results.
+  Other failures on the starting page raise `FetchError`. If the overall crawl deadline
   expires, it raises a timeout error and the background job follows its retry policy.
 
 There is no page-count or crawl-depth limit. The overall crawl deadline
@@ -475,7 +484,7 @@ parameters; they can identify different pages.
   timeout, and 15-second per-operation network timeout.
 - Active HTTP requests share the overall crawl deadline and stop without retries
   when it expires.
-- Maximum 2 MiB of decoded HTML. Accept `text/html` and `application/xhtml+xml`.
+- Maximum 4 MiB of decoded HTML. Accept `text/html` and `application/xhtml+xml`.
 - User agent: `llms-txt-gen/0.1`.
 
 Set `FETCH_TIMEOUT_SECONDS` in the worker's environment or `.env` file to configure
@@ -487,9 +496,9 @@ timeouts still apply.
 | FetchError code | Meaning |
 | --- | --- |
 | 400 | Unsafe destination or embedded credentials |
-| 413 | HTML exceeds 2 MiB |
-| 415 | Upstream content is not HTML/XHTML |
-| 502 | DNS/network failure, upstream error status, or invalid/excessive redirects |
+| 4xx | Upstream client error; retain the link with null metadata |
+| 413 | HTML exceeds 4 MiB; retain the link with null metadata |
+| 502 | DNS/network failure, upstream non-4xx error status, or invalid/excessive redirects |
 | 504 | Fetch deadline or network timeout |
 
 Bind to localhost during development. A public deployment should add authentication,
@@ -530,7 +539,8 @@ and whitespace-only values count as missing. Each section is sorted by
 normalized URL with duplicates removed (first result wins). Empty sections are
 omitted. Link labels use the page title, falling back to the
 URL path. Descriptions become optional link notes. Discovered
-links to pages absent from the successful results are not included.
+links retained after 4xx fetch failures appear under `Optional` with URL path labels
+and no description. Links absent from the crawl results are not included.
 
 The renderer preserves supplied section and entry order, moves `Optional` to
 the end, and omits empty sections and blank optional content. Metadata, including
