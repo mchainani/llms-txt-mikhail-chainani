@@ -20,6 +20,13 @@ class FetchPageRequest(BaseModel):
         strict=True,
         description="Maximum unique links in the crawl result. Omit or pass null to use 50.",
     )
+    max_depth: float | None = Field(
+        default=None,
+        gt=0,
+        allow_inf_nan=False,
+        strict=True,
+        description="Exclusive crawl depth limit; root is level 0. Omit or pass null to use 3.",
+    )
     fetch_timeout_seconds: float | None = Field(
         default=None,
         gt=0,

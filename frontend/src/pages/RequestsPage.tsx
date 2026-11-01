@@ -17,6 +17,7 @@ export function RequestsPage() {
   const [cron, setCron] = useState('');
   const [timeout, setTimeout] = useState('');
   const [maxPages, setMaxPages] = useState('');
+  const [maxDepth, setMaxDepth] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const mounted = useRef(true);
@@ -36,7 +37,7 @@ export function RequestsPage() {
     setError(null);
     setSubmitting(true);
     try {
-      const created = await createRequest(url, cron, timeout, maxPages);
+      const created = await createRequest(url, cron, timeout, maxPages, maxDepth);
       if (mounted.current) { navigate(`/requests/${created.id}/runs`); }
     } catch (error) {
       if (mounted.current) { setError(error instanceof Error ? error.message : 'Unable to create the request.'); }
@@ -53,6 +54,7 @@ export function RequestsPage() {
           <div className="field"><label htmlFor="cron">Cron expression <span className="optional">optional</span></label><input id="cron" className="mono" placeholder="0 9 * * 1" aria-describedby="cron-hint" value={cron} onChange={(event) => setCron(event.target.value)} disabled={submitting} /><p id="cron-hint" className="field-hint">Leave blank to run once. Schedules use UTC.</p></div>
           <div className="field"><label htmlFor="fetch-timeout">Fetch timeout (seconds) <span className="optional">optional</span></label><input id="fetch-timeout" type="number" min="0" step="any" placeholder="Server default" aria-describedby="fetch-timeout-hint" value={timeout} onChange={(event) => { setTimeout(event.target.value); event.target.setCustomValidity(event.target.value !== '' && Number(event.target.value) <= 0 ? 'Enter a timeout greater than zero.' : ''); }} disabled={submitting} /><p id="fetch-timeout-hint" className="field-hint">Maximum time for the entire crawl. Leave blank to use the server default.</p></div>
           <div className="field"><label htmlFor="max-pages">Maximum pages <span className="optional">optional</span></label><input id="max-pages" type="number" min="1" step="1" placeholder="50" aria-describedby="max-pages-hint" value={maxPages} onChange={(event) => setMaxPages(event.target.value)} disabled={submitting} /><p id="max-pages-hint" className="field-hint">Stop after collecting this many unique page links, then generate the file. Leave blank to use 50.</p></div>
+          <div className="field"><label htmlFor="max-depth">Maximum depth <span className="optional">optional</span></label><input id="max-depth" type="number" min="0" step="any" placeholder="3" aria-describedby="max-depth-hint" value={maxDepth} onChange={(event) => { setMaxDepth(event.target.value); event.target.setCustomValidity(event.target.value !== '' && (!Number.isFinite(Number(event.target.value)) || Number(event.target.value) <= 0) ? 'Enter a depth greater than zero.' : ''); }} disabled={submitting} /><p id="max-depth-hint" className="field-hint">Root is level 0. Only levels below this limit are crawled. Leave blank to use 3 (levels 0, 1, and 2).</p></div>
         </div>
         {error && <ErrorNotice message={error} />}
         <div className="form-footer"><span><span aria-hidden="true">↳</span> Scheduled requests start at the next cron time; others start immediately.</span><button className="button primary" type="submit" disabled={submitting}>{submitting ? 'Creating…' : 'Create request'}<span aria-hidden="true">→</span></button></div>

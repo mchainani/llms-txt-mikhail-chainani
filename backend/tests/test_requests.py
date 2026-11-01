@@ -11,6 +11,34 @@ from llms_txt_gen.main import create_app
 from llms_txt_gen.routers.models import FetchPageRequest
 
 
+@pytest.mark.parametrize("depth", [0.5, 1, 3, 5.5, None])
+def test_max_depth_accepts_positive_numbers_or_default(depth):
+    payload = FetchPageRequest(url="https://example.com/", max_depth=depth)
+    assert payload.max_depth == depth
+
+
+@pytest.mark.parametrize("depth", [0, -1, True, "3", {}, [], float("inf"), float("nan")])
+def test_max_depth_rejects_invalid_values(depth):
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        FetchPageRequest(url="https://example.com/", max_depth=depth)
+
+
+def test_request_depth_persists_with_other_configs(requests_client, run_database):
+    response = requests_client.post(
+        "/llms-txt/requests",
+        json={"url": "https://example.com/", "max_depth": 4, "max_pages": 10},
+    )
+    assert response.status_code == 201
+    record = response.json()
+    assert json.loads(record["configs"]) == {"max_depth": 4, "max_pages": 10}
+    stored = run_database.execute(
+        "SELECT configs FROM llms_txt_requests WHERE id = %s", (record["id"],)
+    ).fetchone()
+    assert stored["configs"] == record["configs"]
+
+
 @pytest.mark.parametrize("limit", [1, 250, 500, None])
 def test_max_pages_accepts_positive_integers_or_default(limit):
     payload = FetchPageRequest(url="https://example.com/", max_pages=limit)

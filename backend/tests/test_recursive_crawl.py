@@ -11,6 +11,156 @@ from llms_txt_gen.crawling.http_client import FetchError
 
 
 @pytest.mark.parametrize(
+    "depth, expected_paths",
+    [
+        (None, ["/", "/1", "/2"]),
+        (0.5, ["/"]),
+        (1, ["/"]),
+        (1.5, ["/", "/1"]),
+        (2, ["/", "/1"]),
+        (3, ["/", "/1", "/2"]),
+        (4, ["/", "/1", "/2", "/3"]),
+    ],
+)
+def test_depth_excludes_pages_at_or_beyond_limit(monkeypatch, depth, expected_paths):
+    visits = []
+
+    def upstream(request):
+        path = request.url.path
+        visits.append(path)
+        level = 0 if path == "/" else int(path[1:])
+        return html_response(f'<a href="/{level + 1}">Next</a><a href="/">Root</a>')
+
+    configs = None if depth is None else json.dumps({"max_depth": depth})
+    with fetching(monkeypatch, upstream) as fetch:
+        response = fetch("https://example.com/", configs)
+
+    assert visits == expected_paths
+    assert result_urls(response) == [f"https://example.com{path}" for path in expected_paths]
+
+
+def test_bfs_waits_for_slow_parent_and_uses_shortest_path(monkeypatch):
+    monkeypatch.setattr(fetcher, "CRAWL_CONCURRENCY", 2)
+    visits = Counter()
+    started_before_parent_finished = []
+
+    async def exercise():
+        deeper_started = asyncio.Event()
+        slow_parent_finished = False
+
+        async def upstream(request):
+            nonlocal slow_parent_finished
+            path = request.url.path
+            visits[path] += 1
+            if path == "/b":
+                try:
+                    await asyncio.wait_for(deeper_started.wait(), 0.1)
+                except TimeoutError:
+                    pass
+                slow_parent_finished = True
+            if path in {"/c", "/x", "/y"}:
+                deeper_started.set()
+                if not slow_parent_finished:
+                    started_before_parent_finished.append(path)
+            pages = {
+                "/": '<a href="/a">A</a><a href="/b">B</a>',
+                "/a": '<a href="/c">C</a>',
+                "/b": '<a href="/x">X</a>',
+                "/c": '<a href="/x">X</a>',
+                "/x": '<a href="/y">Y</a>',
+                "/y": '<a href="/">Root</a>',
+            }
+            return html_response(pages[path])
+
+        with fetching(monkeypatch, upstream):
+            return await fetcher.fetch_page("https://example.com/", '{"max_depth": 4}')
+
+    response = asyncio.run(exercise())
+    assert started_before_parent_finished == []
+    assert visits == Counter({"/": 1, "/a": 1, "/b": 1, "/c": 1, "/x": 1, "/y": 1})
+    assert set(result_urls(response)) == {
+        "https://example.com/",
+        "https://example.com/a",
+        "https://example.com/b",
+        "https://example.com/c",
+        "https://example.com/x",
+        "https://example.com/y",
+    }
+
+
+def test_page_limit_is_shared_between_levels(monkeypatch):
+    visits = []
+
+    def upstream(request):
+        path = request.url.path
+        visits.append(path)
+        level = 0 if path == "/" else int(path[1:])
+        return html_response(f'<a href="/{level + 1}">Next</a>')
+
+    with fetching(monkeypatch, upstream) as fetch:
+        response = fetch("https://example.com/", '{"max_depth": 5, "max_pages": 3}')
+
+    assert visits == ["/", "/1", "/2"]
+    assert len(response.results) == 3
+
+
+@pytest.mark.parametrize("terminal_failure", [False, True])
+def test_next_level_waits_for_parent_retries(monkeypatch, terminal_failure):
+    monkeypatch.setattr(fetcher, "CRAWL_CONCURRENCY", 2)
+    attempts = 0
+    attempts_when_child_started = []
+
+    async def exercise():
+        child_started = asyncio.Event()
+
+        async def upstream(request):
+            nonlocal attempts
+            path = request.url.path
+            if path == "/":
+                return html_response('<a href="/a">A</a><a href="/retry">Retry</a>')
+            if path == "/a":
+                return html_response('<a href="/child">Child</a>')
+            if path == "/retry":
+                attempts += 1
+                if attempts == 1:
+                    try:
+                        await asyncio.wait_for(child_started.wait(), 0.1)
+                    except TimeoutError:
+                        pass
+                if terminal_failure or attempts == 1:
+                    return httpx.Response(503)
+                return html_response("<title>Recovered</title>")
+            attempts_when_child_started.append(attempts)
+            child_started.set()
+            return html_response("<title>Child</title>")
+
+        with fetching(monkeypatch, upstream):
+            return await fetcher.fetch_page("https://example.com/")
+
+    response = asyncio.run(exercise())
+    assert attempts_when_child_started == [3 if terminal_failure else 2]
+    assert "https://example.com/child" in result_urls(response)
+
+
+def test_deadline_is_shared_between_levels(monkeypatch):
+    visits = []
+
+    async def upstream(request):
+        path = request.url.path
+        visits.append(path)
+        await asyncio.sleep(0.2)
+        level = 0 if path == "/" else int(path[1:])
+        return html_response(f'<a href="/{level + 1}">Next</a>')
+
+    with fetching(monkeypatch, upstream) as fetch:
+        with pytest.raises(FetchError) as error:
+            fetch("https://example.com/", '{"fetch_timeout_seconds": 0.5}')
+
+    assert error.value.status_code == 504
+    assert visits == ["/", "/1", "/2"]
+
+
+@pytest.mark.parametrize(
     "configs, expected",
     [
         (None, 50),
@@ -213,49 +363,18 @@ def test_page_concurrency_is_bounded_and_shared_links_are_deduplicated(monkeypat
 
 
 @pytest.mark.parametrize("redirect", [False, True])
-def test_starting_page_precedes_a_child_that_finishes_during_enqueue(monkeypatch, redirect):
-    from crawlee import ConcurrencySettings
-    from crawlee.storages import RequestQueue
+def test_starting_page_precedes_children_after_redirects(monkeypatch, redirect):
+    def upstream(request):
+        if redirect and request.url.path == "/":
+            return httpx.Response(302, headers={"location": "/landing"})
+        return html_response(
+            '<title>Root</title><a href="/child">Child</a>'
+            if request.url.path != "/child"
+            else "<title>Child</title>"
+        )
 
-    monkeypatch.setattr(
-        fetcher,
-        "ConcurrencySettings",
-        lambda **kwargs: ConcurrencySettings(max_concurrency=2, desired_concurrency=2),
-    )
-    add_requests = RequestQueue.add_requests
-    get_metadata = RequestQueue.get_metadata
-
-    async def exercise():
-        child_recorded = asyncio.Event()
-
-        async def delayed_add(queue, requests, **kwargs):
-            await add_requests(queue, requests, **kwargs)
-            if any(
-                getattr(request, "url", None) == "https://example.com/child" for request in requests
-            ):
-                await asyncio.wait_for(child_recorded.wait(), 2)
-
-        async def metadata(queue):
-            result = await get_metadata(queue)
-            child_recorded.set()
-            return result
-
-        monkeypatch.setattr(RequestQueue, "add_requests", delayed_add)
-        monkeypatch.setattr(RequestQueue, "get_metadata", metadata)
-
-        def upstream(request):
-            if redirect and request.url.path == "/":
-                return httpx.Response(302, headers={"location": "/landing"})
-            return html_response(
-                '<title>Root</title><a href="/child">Child</a>'
-                if request.url.path != "/child"
-                else "<title>Child</title>"
-            )
-
-        with fetching(monkeypatch, upstream):
-            return await fetcher.fetch_page("https://example.com/")
-
-    response = asyncio.run(exercise())
+    with fetching(monkeypatch, upstream) as fetch:
+        response = fetch("https://example.com/")
     assert result_urls(response) == [
         "https://example.com/landing" if redirect else "https://example.com/",
         "https://example.com/child",

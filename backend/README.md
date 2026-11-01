@@ -184,7 +184,7 @@ Create a request with:
 ```bash
 curl -X POST http://127.0.0.1:8000/llms-txt/requests \
   -H 'Content-Type: application/json' \
-  -d '{"url":"https://example.com/","fetch_timeout_seconds":120,"max_pages":50}'
+  -d '{"url":"https://example.com/","fetch_timeout_seconds":120,"max_pages":50,"max_depth":3}'
 ```
 
 The response is HTTP 201 with `id`, normalized `url`, `created_at`, `timestamp`,
@@ -210,6 +210,13 @@ skipped pages, retries, and duplicate redirect destinations do not add results.
 Custom values are stored alongside the timeout in `configs`, for example
 `{"fetch_timeout_seconds":120.0,"max_pages":50}`. Existing requests with no
 page limit in their configs also use 50.
+
+The optional `max_depth` field is an exclusive crawl depth limit. It must be a
+positive, finite JSON number; omit it or pass `null` to use 3. The requested URL
+is level 0, its direct links are level 1, and their links are level 2. With
+`max_depth=3`, pages at level 3 or greater are never queued. Fractional limits use
+the same comparison: `max_depth=1.5` includes levels 0 and 1. Custom values are
+stored in `configs`; existing requests without a depth setting also use 3.
 
 To schedule recurring generation, include `cron_expression`:
 
@@ -390,10 +397,15 @@ generation endpoints.
 
 ### Crawl behavior
 
-- Fetch the starting page, then recursively enqueue HTTP(S) links with the exact
+- Fetch the starting page, then traverse HTTP(S) links breadth-first with the exact
   hostname of the original normalized starting URL. Subdomains are distinct;
   schemes and ports do not affect hostname matching. This scope remains fixed
   even when a page redirects to a different hostname.
+- Store each request's level in Crawlee's `user_data`, starting at 0. Collect
+  children at the parent's level plus one only when that level is below
+  `max_depth` (3 by default). Finish all requests and retries at a level before
+  submitting its children to the same Crawlee queue. Pages within a level run
+  concurrently; the first discovery of a URL uses its shortest link path.
 - Resolve relative URLs against the final page URL, honoring the first HTML
   `<base href>` element. Ignore malformed base URLs.
 - Use each normalized URL as the Crawlee request's explicit `unique_key`.
@@ -405,7 +417,8 @@ generation endpoints.
 - Return the normalized starting `requested_url` and a `results` array of
   crawled pages and links retained after 4xx fetch failures. Unless skipped for a non-HTML
   media type or exceeding the HTML size limit, the starting page is always first, using its
-  final URL after redirects; remaining pages follow completion order. Each result contains
+  final URL after redirects; remaining pages follow level order and completion
+  order within each level. Each result contains
   only its normalized final `url`, `title`, and `description`. Missing titles
   and descriptions are `null`. Extracted links are used internally for crawling.
 - Different aliases can redirect to the same final URL. They are distinct queue
@@ -432,8 +445,8 @@ Already active requests may finish, but cannot add results or enqueue more links
 after the limit. If the deadline expires while they finish, the collected results
 are still returned successfully. Queued requests are discarded during cleanup.
 
-There is no crawl-depth limit. The overall crawl deadline
-and per-page network limits below still apply. The crawler does not execute
+The overall crawl deadline applies across all levels, and the per-page network
+limits below still apply. The crawler does not execute
 JavaScript or summarize content. The worker uses the Python functions below to
 generate `llms.txt`.
 
@@ -474,7 +487,7 @@ parameters; they can identify different pages.
 
 ### Fetch behavior
 
-- Each generation job runs a recursive Crawlee `BeautifulSoupCrawler` with a uniquely
+- Each generation job runs a breadth-first Crawlee `BeautifulSoupCrawler` with a uniquely
   named in-memory request queue that is dropped when the crawl finishes. Repeated
   and concurrent jobs do not reuse completed requests or page results.
 - Crawlee runs on the Procrastinate worker's event loop. Each crawl owns its HTTP
@@ -482,7 +495,7 @@ parameters; they can identify different pages.
   definition; the worker imports the crawler when it executes a generation job.
 - Crawlee owns the request lifecycle and HTML parsing. A custom client using
   Crawlee's public `HttpClient` interface preserves bounded public-only HTTP access.
-- Each crawl starts with a desired concurrency of 25 pages and a maximum of 25.
+- Each crawl level starts with a desired concurrency of 25 pages and a maximum of 25.
   Crawlee can reduce concurrency under resource pressure. Set `CRAWL_CONCURRENCY`
   to a positive integer in the worker's environment or `.env` file to change both
   values, then restart the worker. This is separate from worker concurrency:

@@ -215,6 +215,36 @@ describe('request workflow', () => {
     expect(fetcher.mock.calls.some(([, options]) => options?.method === 'POST')).toBe(false);
   });
 
+  it.each(['', '1', '4', '1.5'])('submits maximum depth %j with a default of 3', async (depth) => {
+    const fetcher = serve();
+    const user = userEvent.setup();
+    open();
+    await user.click(screen.getByRole('button', { name: 'New request' }));
+    await user.type(screen.getByLabelText('Website URL'), 'https://example.com/');
+    const input = screen.getByLabelText(/Maximum depth/);
+    expect(input).toHaveAttribute('placeholder', '3');
+    if (depth) { await user.type(input, depth); }
+    await user.click(screen.getByRole('button', { name: 'Create request' }));
+    expect(await screen.findByRole('heading', { name: 'Request runs' })).toBeInTheDocument();
+    const post = fetcher.mock.calls.find(([, options]) => options?.method === 'POST');
+    expect(JSON.parse(post?.[1]?.body as string)).toEqual({
+      url: 'https://example.com/', cron_expression: null,
+      ...(depth ? { max_depth: Number(depth) } : {}),
+    });
+  });
+
+  it.each(['0', '-1'])('rejects invalid maximum depth %s before submission', async (depth) => {
+    const fetcher = serve();
+    const user = userEvent.setup();
+    open();
+    await user.click(screen.getByRole('button', { name: 'New request' }));
+    await user.type(screen.getByLabelText('Website URL'), 'https://example.com/');
+    await user.type(screen.getByLabelText(/Maximum depth/), depth);
+    await user.click(screen.getByRole('button', { name: 'Create request' }));
+    expect(screen.getByLabelText(/Maximum depth/)).toBeInvalid();
+    expect(fetcher.mock.calls.some(([, options]) => options?.method === 'POST')).toBe(false);
+  });
+
   it('shows backend cron validation without losing the entered values', async () => {
     serve();
     vi.stubGlobal('fetch', vi.fn(async (_input: string, options?: RequestInit) =>
