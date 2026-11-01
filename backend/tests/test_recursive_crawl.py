@@ -308,12 +308,18 @@ def test_pending_request_log_includes_current_result_count_at_limit(monkeypatch,
     assert len(response.results) == 2
     assert (
         "Fetched page https://example.com/ "
-        "(status=200, current_page_count=1, pending_request_count="
+        "(status=200, level=0, current_page_count=1, pending_request_count="
     ) in caplog.text
     assert (
         "Fetched page https://example.com/child "
-        "(status=200, current_page_count=2, pending_request_count="
+        "(status=200, level=1, current_page_count=2, pending_request_count="
     ) in caplog.text
+    assert [message for message in caplog.messages if message.startswith("Completed level")] == [
+        "Completed level 0 for https://example.com/ "
+        "(current_page_count=1, next_level_page_count=1)",
+        "Completed level 1 for https://example.com/ "
+        "(current_page_count=2, next_level_page_count=0)",
+    ]
 
 
 @pytest.mark.parametrize("limit", [None, 3, 1])

@@ -132,9 +132,11 @@ async def _crawl_page(
                         )
         metadata = await queue.get_metadata()
         logger.info(
-            "Fetched page %s (status=%s, current_page_count=%s, pending_request_count=%s)",
+            "Fetched page %s (status=%s, level=%s, "
+            "current_page_count=%s, pending_request_count=%s)",
             final_url,
             response.status_code,
+            context.request.user_data["level"],
             len(results),
             metadata.pending_request_count,
         )
@@ -173,6 +175,13 @@ async def _crawl_page(
                 if task := asyncio.current_task():
                     if task.cancelling():
                         raise asyncio.CancelledError
+                logger.info(
+                    "Completed level %s for %s (current_page_count=%s, next_level_page_count=%s)",
+                    frontier[0].user_data["level"],
+                    requested_url,
+                    len(results),
+                    len(next_frontier),
+                )
                 frontier = list(next_frontier.values())
     except Exception as exc:
         # Cancellation during Crawlee startup can surface as a statistics error.
