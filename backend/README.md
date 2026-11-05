@@ -104,6 +104,12 @@ procrastinate --log-level info \
   --app=llms_txt_gen.jobs.app worker
 ```
 
+The shared app registers a `retry_stalled_jobs` periodic task every ten minutes
+(UTC). It requeues jobs abandoned by workers whose heartbeats have stopped, using
+Procrastinate's default 30-second heartbeat threshold. Keep periodic tasks enabled
+on the worker (do not pass `--no-periodic`). This does not detect hung tasks whose
+workers still send heartbeats. Recovered jobs restart from the beginning.
+
 Both request and run jobs are registered with the shared app. The
 `process_llms_txt_request` job accepts `request_id`, verifies that request exists,
 and creates a pending run and its generation job in one transaction, using the

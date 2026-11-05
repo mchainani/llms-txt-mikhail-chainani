@@ -13,6 +13,7 @@ app = App(
     import_paths=[
         "llms_txt_gen.jobs.run_worker",
         "llms_txt_gen.jobs.request_worker",
+        "llms_txt_gen.jobs.recovery",
     ],
 )
 
