@@ -282,11 +282,11 @@ describe('request workflow', () => {
     expect(screen.getByText(/refresh.*5 seconds/i)).toBeInTheDocument();
   });
 
-  it.each([0, 3, 6])('shows retry count %i in the runs table', async (retryCount) => {
-    serve({ [`${base}/request-1/runs`]: [{ ...run, retry_count: retryCount }] });
+  it.each([0, 3, 6])('shows attempts %i in the runs table', async (attempts) => {
+    serve({ [`${base}/request-1/runs`]: [{ ...run, retry_count: attempts }] });
     open('/requests/request-1/runs');
-    expect(await screen.findByRole('columnheader', { name: 'Retry count' })).toBeInTheDocument();
-    expect(screen.getByRole('cell', { name: String(retryCount) })).toBeInTheDocument();
+    expect(await screen.findByRole('columnheader', { name: 'Attempts' })).toBeInTheDocument();
+    expect(screen.getByRole('cell', { name: String(attempts) })).toBeInTheDocument();
   });
 
   it('shows an empty request list', async () => {

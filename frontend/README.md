@@ -15,7 +15,7 @@ Vite proxies `/llms-txt` to `http://127.0.0.1:8000`. To use another backend, cop
 ## Pages
 
 - `/requests`: submit an HTTP(S) URL with an optional cron expression, fetch timeout in seconds, maximum pages, and maximum depth, and browse existing requests. Blank schedules run once; cron schedules use UTC and are validated by the backend. Timeouts accept positive numbers, including fractions; leaving the field blank uses the server default (normally 600 seconds). Maximum pages accepts positive integers and defaults to 50 when blank. The crawl stops when that many unique links are collected and generates the file from those results. Maximum depth accepts positive numbers and defaults to 3 when blank: the root is level 0, and only levels below the limit are crawled. Pages are processed breadth-first, concurrently within each level. Creation opens the new request's runs.
-- `/requests/:requestId/runs`: inspect runs, including their retry count, and open their generated files. Pending runs refresh every five seconds; a failed refresh offers a retry.
+- `/requests/:requestId/runs`: inspect runs, including their attempts, and open their generated files. Pending runs refresh every five seconds; a failed refresh offers a retry.
 - `/requests/:requestId/runs/:runId/file`: view plain-text content and download `llms.txt`. Direct visits before generation completes refresh the run until output becomes available.
 
 ```bash
