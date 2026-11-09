@@ -90,10 +90,7 @@ def test_request_job_ids_round_trip_and_can_be_updated(run_database, job_id):
         async with database_connection() as connection:
             repo = RequestRepository(connection)
             entity = await repo.create(url="https://example.com/", job_id=job_id)
-            if job_id is None:
-                assert entity.job_id is not None
-            else:
-                assert entity.job_id == job_id
+            assert entity.job_id == job_id
             assert (await repo.read(entity.id)).job_id == entity.job_id
             assert (await repo.list())[0].job_id == entity.job_id
             updated = await repo.modify(
@@ -216,7 +213,7 @@ def test_create_request_rejects_invalid_cron_without_writes(run_database, job_id
 
 @pytest.mark.parametrize("job_id", [None, "existing-job"])
 @pytest.mark.parametrize("cron_expression", [None, "0 9 * * 1"])
-def test_create_request_enqueues_at_next_cron_time_or_immediately_when_job_id_is_missing(
+def test_create_request_schedules_cron_or_creates_run_when_job_id_is_missing(
     run_database, monkeypatch, job_id, cron_expression
 ):
     monkeypatch.setattr(
@@ -235,20 +232,30 @@ def test_create_request_enqueues_at_next_cron_time_or_immediately_when_job_id_is
 
     request = anyio.run(scenario)
     jobs = run_database.execute("SELECT * FROM procrastinate_jobs").fetchall()
+    runs = run_database.execute("SELECT * FROM llms_txt_runs").fetchall()
     if job_id is not None:
         assert request.job_id == job_id
         assert jobs == []
+        assert runs == []
+    elif cron_expression is None:
+        assert request.job_id is None
+        assert len(runs) == 1
+        assert runs[0]["request_id"] == request.id
+        assert runs[0]["status"] == "pending"
+        assert len(jobs) == 1
+        assert runs[0]["job_id"] == str(jobs[0]["id"])
+        assert jobs[0]["task_name"] == "process_llms_txt_run"
+        assert jobs[0]["args"] == {"run_id": str(runs[0]["id"])}
+        assert jobs[0]["scheduled_at"] is None
     else:
+        assert runs == []
         assert len(jobs) == 1
         job = jobs[0]
         assert request.job_id == str(job["id"])
         assert job["task_name"] == "process_llms_txt_request"
         assert job["args"] == {"request_id": str(request.id)}
         assert job["lock"] == f"llms-txt-request:{request.id}"
-        if cron_expression is None:
-            assert job["scheduled_at"] is None
-        else:
-            assert job["scheduled_at"] == datetime(2026, 11, 2, 9, tzinfo=UTC)
+        assert job["scheduled_at"] == datetime(2026, 11, 2, 9, tzinfo=UTC)
 
 
 @pytest.mark.parametrize("async_modifier", [False, True])

@@ -80,7 +80,7 @@ def test_request_job_for_missing_request_does_not_create_run_or_job(run_database
     assert run_database.execute("SELECT id FROM procrastinate_jobs").fetchall() == []
 
 
-def test_worker_processes_initial_request_then_generates_run(run_database, upstream, run_queue):
+def test_worker_generates_one_time_run_without_request_job(run_database, upstream, run_queue):
     request = create_scheduled_request(cron_expression=None)
     run_queue()
     run = run_database.execute("SELECT * FROM llms_txt_runs").fetchone()
@@ -93,7 +93,6 @@ def test_worker_processes_initial_request_then_generates_run(run_database, upstr
     assert file["content"].startswith("# Example\n")
     jobs = run_database.execute("SELECT task_name, status FROM procrastinate_jobs").fetchall()
     assert {(job["task_name"], job["status"]) for job in jobs} == {
-        ("process_llms_txt_request", "succeeded"),
         ("process_llms_txt_run", "succeeded"),
     }
     assert upstream == ["example.com"]

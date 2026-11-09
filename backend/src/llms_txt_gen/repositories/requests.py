@@ -41,13 +41,13 @@ class RequestRepository(Repository[Request]):
         configs: str | None = None,
         id: UUID | None = None,
     ) -> Request:
-        """Create a request and its missing processing job at the next cron time or now."""
+        """Create a request and its missing cron job or one-time run atomically."""
         schedule_at = next_cron_time(cron_expression) if cron_expression is not None else None
         request_id = id if id is not None else uuid4()
         async with self._operation():
-            if job_id is None:
+            if job_id is None and cron_expression is not None:
                 job_id = await self._enqueue(request_id, schedule_at=schedule_at)
-            return await self._create(
+            request = await self._create(
                 {
                     "id": request_id,
                     "url": url,
@@ -56,6 +56,9 @@ class RequestRepository(Repository[Request]):
                     "configs": configs,
                 }
             )
+            if job_id is None and cron_expression is None:
+                await RunRepository(self.connection).create(request_id=request_id)
+            return request
 
     async def modify(
         self, entity_id: UUID, modifier: Callable[[Request], Request | Awaitable[Request]]

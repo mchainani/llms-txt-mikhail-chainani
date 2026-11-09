@@ -117,7 +117,9 @@ same operation as `POST /llms-txt/requests/{request_id}/runs`.
 For scheduled requests, that transaction also enqueues the next cron occurrence
 and updates the request's `job_id` to that next job's ID. Cron expressions use UTC.
 Request creation enqueues the first execution at the next matching cron time when
-a cron expression is set, or immediately otherwise. For recurring requests, each
+a cron expression is set. Without a cron expression, creation inserts a pending run
+and enqueues its generation job in the same transaction, leaving the request's
+`job_id` null. For recurring requests, each
 execution schedules the next matching time after now, skipping missed intervals.
 Schedules survive server and worker restarts because the next job is in Postgres.
 For finite schedules with a final year, attempting to schedule beyond the final
@@ -168,7 +170,7 @@ The API follows the hierarchy `/llms-txt/requests/{request_id}/runs/{run_id}/fil
 
 | Method | Path | Behavior |
 | --- | --- | --- |
-| POST | `/llms-txt/requests` | Create a request and enqueue processing at the next cron time, or immediately without `cron_expression` |
+| POST | `/llms-txt/requests` | Create a request and schedule its next cron occurrence, or create a pending run immediately without `cron_expression` |
 | GET | `/llms-txt/requests` | List all requests, newest first |
 | GET | `/llms-txt/requests/{request_id}` | Get one request |
 | DELETE | `/llms-txt/requests/{request_id}` | Stop its job and delete the request, its runs, and their files |
@@ -194,12 +196,13 @@ curl -X POST http://127.0.0.1:8000/llms-txt/requests \
 ```
 
 The response is HTTP 201 with `id`, normalized `url`, `created_at`, `timestamp`,
-nullable `cron_expression`, nullable `configs`, and nullable `job_id`. Creating a request enqueues a
-`process_llms_txt_request` job and saves its ID in the same transaction. The job
-is scheduled at the next cron time when a cron expression is set, or immediately
-otherwise.
-The endpoint does not create a run; the worker creates it when processing the job.
-Without a cron expression (omitted or `null`), processing runs once.
+nullable `cron_expression`, nullable `configs`, and nullable `job_id`. With a cron
+expression, creation enqueues a `process_llms_txt_request` job at the next cron time
+and saves its ID in the same transaction; the worker creates the run at that time.
+Without a cron expression (omitted or `null`), creation inserts one pending run and
+enqueues its `process_llms_txt_run` job atomically with the request. The request's
+`job_id` is null, and the run stores the generation job ID. Generation happens
+asynchronously in the worker.
 
 The optional `fetch_timeout_seconds` field sets the total crawl deadline and page
 handler timeout for every run of the request. It must be a positive, finite JSON
@@ -297,7 +300,9 @@ Requests and runs list newest first with ID as a tie breaker; files list by
 descending ID. Empty lists return `[]`. Requests accept an optional
 `job_id: str | None` and nullable `cron_expression` on creation. With no supplied
 job ID, creation atomically enqueues a request job at the next cron time, or
-immediately when no cron expression is set. Updating a request's `job_id` to `None`
+creates a pending run and its generation job when no cron expression is set.
+Supplying a job ID skips automatic job and run creation.
+Updating a request's `job_id` to `None`
 schedules its next cron job in the same transaction when a cron expression is
 present. Runs enqueue their processing job and save its ID atomically on creation.
 

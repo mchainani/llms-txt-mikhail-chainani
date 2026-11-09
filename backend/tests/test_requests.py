@@ -75,7 +75,7 @@ def requests_client(run_database):
 
 
 @pytest.mark.parametrize("extra", [{}, {"cron_expression": None}, {"fetch_timeout_seconds": None}])
-def test_create_request_without_cron_enqueues_immediate_request_job(
+def test_create_request_without_cron_creates_pending_run_and_generation_job(
     requests_client, run_database, extra
 ):
     response = requests_client.post(
@@ -95,7 +95,7 @@ def test_create_request_without_cron_enqueues_immediate_request_job(
     }
     assert record["cron_expression"] is None
     assert record["configs"] is None
-    assert record["job_id"] is not None
+    assert record["job_id"] is None
     request_id = UUID(record["id"])
     assert record["url"] == "https://example.com/docs?a=1&z=2"
     for field in ("created_at", "timestamp"):
@@ -105,12 +105,18 @@ def test_create_request_without_cron_enqueues_immediate_request_job(
     ).fetchone()
     assert stored["url"] == record["url"]
     assert stored["job_id"] == record["job_id"]
-    assert run_database.execute("SELECT id FROM llms_txt_runs").fetchall() == []
+    runs = run_database.execute("SELECT * FROM llms_txt_runs").fetchall()
+    assert len(runs) == 1
+    run = runs[0]
+    assert run["request_id"] == request_id
+    assert run["status"] == "pending"
+    assert run["file_id"] is None
     jobs = run_database.execute("SELECT * FROM procrastinate_jobs").fetchall()
     assert len(jobs) == 1
-    assert record["job_id"] == str(jobs[0]["id"])
-    assert jobs[0]["task_name"] == "process_llms_txt_request"
-    assert jobs[0]["args"] == {"request_id": str(request_id)}
+    assert run["job_id"] == str(jobs[0]["id"])
+    assert jobs[0]["task_name"] == "process_llms_txt_run"
+    assert jobs[0]["args"] == {"run_id": str(run["id"])}
+    assert jobs[0]["lock"] == f"llms-txt-run:{run['id']}"
     assert jobs[0]["scheduled_at"] is None
     assert jobs[0]["status"] == "todo"
     assert run_database.execute("SELECT id FROM llms_txt_files").fetchall() == []
@@ -168,16 +174,26 @@ def test_request_enqueue_failure_rolls_back_everything(run_database, cron_expres
     assert run_database.execute("SELECT id FROM procrastinate_jobs").fetchall() == []
 
 
-@pytest.mark.parametrize("cron_expression", [None, "0 9 * * 1"])
-def test_request_job_id_update_failure_rolls_back_everything(run_database, cron_expression):
+def test_cron_request_job_id_save_failure_rolls_back_everything(run_database):
     run_database.execute(
         "ALTER TABLE llms_txt_requests ADD CONSTRAINT reject_job_id CHECK (job_id IS NULL)"
     )
     with TestClient(create_app(), raise_server_exceptions=False) as client:
         response = client.post(
             "/llms-txt/requests",
-            json={"url": "https://example.com/", "cron_expression": cron_expression},
+            json={"url": "https://example.com/", "cron_expression": "0 9 * * 1"},
         )
+    assert response.status_code == 500
+    assert run_database.execute("SELECT id FROM llms_txt_requests").fetchall() == []
+    assert run_database.execute("SELECT id FROM llms_txt_runs").fetchall() == []
+    assert run_database.execute("SELECT id FROM procrastinate_jobs").fetchall() == []
+
+
+@pytest.mark.parametrize("table", ["llms_txt_requests", "llms_txt_runs"])
+def test_one_time_request_save_failure_rolls_back_everything(run_database, table):
+    run_database.execute(f"ALTER TABLE {table} ADD CONSTRAINT reject_insert CHECK (false)")
+    with TestClient(create_app(), raise_server_exceptions=False) as client:
+        response = client.post("/llms-txt/requests", json={"url": "https://example.com/"})
     assert response.status_code == 500
     assert run_database.execute("SELECT id FROM llms_txt_requests").fetchall() == []
     assert run_database.execute("SELECT id FROM llms_txt_runs").fetchall() == []
