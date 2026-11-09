@@ -218,7 +218,11 @@ def upstream(monkeypatch):
 
 
 @pytest.fixture
-def run_queue(run_database):
+def run_queue(run_database, monkeypatch):
+    queue_app.perform_import_paths()
+    # Only process jobs explicitly queued by these tests.
+    monkeypatch.setattr(queue_app.periodic_registry, "periodic_tasks", {})
+
     def run(concurrency=1):
         async def work():
             connector = PsycopgConnector(conninfo=os.environ["DATABASE_URL"])

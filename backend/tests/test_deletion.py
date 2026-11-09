@@ -101,7 +101,8 @@ def test_delete_request_cascades_without_deleting_other_requests(
 @pytest.mark.parametrize("job_status", ["todo", "doing", "succeeded", "failed", "missing", None])
 def test_delete_request_handles_job_states(deletion_client, run_database, job_status):
     request = deletion_client.post(
-        "/llms-txt/requests", json={"url": "https://example.com/"}
+        "/llms-txt/requests",
+        json={"url": "https://example.com/", "cron_expression": "0 9 * * 1"},
     ).json()
     if job_status is None:
         run_database.execute("UPDATE llms_txt_requests SET job_id = NULL")
