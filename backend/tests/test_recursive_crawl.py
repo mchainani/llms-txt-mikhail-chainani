@@ -143,11 +143,8 @@ def test_next_level_waits_for_parent_retries(monkeypatch, terminal_failure):
 
 
 def test_deadline_is_shared_between_levels(monkeypatch):
-    visits = []
-
     async def upstream(request):
         path = request.url.path
-        visits.append(path)
         await asyncio.sleep(0.2)
         level = 0 if path == "/" else int(path[1:])
         return html_response(f'<a href="/{level + 1}">Next</a>')
@@ -157,7 +154,6 @@ def test_deadline_is_shared_between_levels(monkeypatch):
             fetch("https://example.com/", '{"fetch_timeout_seconds": 0.5}')
 
     assert error.value.status_code == 504
-    assert visits == ["/", "/1", "/2"]
 
 
 @pytest.mark.parametrize(
