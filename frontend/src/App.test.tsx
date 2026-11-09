@@ -55,6 +55,30 @@ function open(path = '/requests') {
 }
 
 describe('request workflow', () => {
+  it('shows saved request options in the runs request details', async () => {
+    const configuredRequest = { ...request, configs: JSON.stringify({ fetch_timeout_seconds: 12.5, max_pages: 25, max_depth: 1.5 }) };
+    serve({ [base]: [configuredRequest], [`${base}/request-1`]: configuredRequest });
+    open('/requests/request-1/runs');
+    expect(await screen.findByRole('definition', { name: 'Fetch timeout' })).toHaveTextContent('12.5 s');
+    expect(screen.getByRole('definition', { name: 'Maximum pages' })).toHaveTextContent('25');
+    expect(screen.getByRole('definition', { name: 'Maximum depth' })).toHaveTextContent('1.5');
+  });
+
+  it.each([null, '{}', '{"max_pages":25}'])('identifies unspecified request options as server defaults for %s', async (configs) => {
+    serve({ [`${base}/request-1`]: { ...request, configs } });
+    open('/requests/request-1/runs');
+    expect(await screen.findByRole('definition', { name: 'Fetch timeout' })).toHaveTextContent('Server default');
+    expect(screen.getByRole('definition', { name: 'Maximum depth' })).toHaveTextContent('Server default');
+    expect(screen.getByRole('definition', { name: 'Maximum pages' })).toHaveTextContent(configs?.includes('25') ? '25' : 'Server default');
+  });
+
+  it.each(['{broken', 'null', '[]'])('keeps the runs page usable when saved configs are invalid: %s', async (configs) => {
+    serve({ [`${base}/request-1`]: { ...request, configs } });
+    open('/requests/request-1/runs');
+    expect(await screen.findByText('Request options unavailable')).toBeInTheDocument();
+    expect(await screen.findByRole('link', { name: /View file/ })).toBeInTheDocument();
+  });
+
   it.each(['pending', 'success', 'failed'])('shows the latest run status %s on the request row', async (status) => {
     serve({ [`${base}/request-1/runs/latest`]: { ...run, status } });
     open();
@@ -176,7 +200,7 @@ describe('request workflow', () => {
     open();
     await user.click(screen.getByRole('button', { name: 'New request' }));
     await user.type(screen.getByLabelText('Website URL'), 'https://example.com/');
-    await user.type(screen.getByLabelText(/Fetch timeout/), timeout);
+    await user.type(screen.getByRole('spinbutton', { name: /Fetch timeout/ }), timeout);
     await user.click(screen.getByRole('button', { name: 'Create request' }));
     expect(await screen.findByRole('heading', { name: 'Request runs' })).toBeInTheDocument();
     const post = fetcher.mock.calls.find(([, options]) => options?.method === 'POST');
@@ -191,7 +215,7 @@ describe('request workflow', () => {
     open();
     await user.click(screen.getByRole('button', { name: 'New request' }));
     await user.type(screen.getByLabelText('Website URL'), 'https://example.com/');
-    const input = screen.getByLabelText(/Maximum pages/);
+    const input = screen.getByRole('spinbutton', { name: /Maximum pages/ });
     expect(input).toHaveAttribute('placeholder', '50');
     if (limit) { await user.type(input, limit); }
     await user.click(screen.getByRole('button', { name: 'Create request' }));
@@ -209,9 +233,9 @@ describe('request workflow', () => {
     open();
     await user.click(screen.getByRole('button', { name: 'New request' }));
     await user.type(screen.getByLabelText('Website URL'), 'https://example.com/');
-    await user.type(screen.getByLabelText(/Maximum pages/), limit);
+    await user.type(screen.getByRole('spinbutton', { name: /Maximum pages/ }), limit);
     await user.click(screen.getByRole('button', { name: 'Create request' }));
-    expect(screen.getByLabelText(/Maximum pages/)).toBeInvalid();
+    expect(screen.getByRole('spinbutton', { name: /Maximum pages/ })).toBeInvalid();
     expect(fetcher.mock.calls.some(([, options]) => options?.method === 'POST')).toBe(false);
   });
 
@@ -221,7 +245,7 @@ describe('request workflow', () => {
     open();
     await user.click(screen.getByRole('button', { name: 'New request' }));
     await user.type(screen.getByLabelText('Website URL'), 'https://example.com/');
-    const input = screen.getByLabelText(/Maximum depth/);
+    const input = screen.getByRole('spinbutton', { name: /Maximum depth/ });
     expect(input).toHaveAttribute('placeholder', '3');
     if (depth) { await user.type(input, depth); }
     await user.click(screen.getByRole('button', { name: 'Create request' }));
@@ -239,9 +263,9 @@ describe('request workflow', () => {
     open();
     await user.click(screen.getByRole('button', { name: 'New request' }));
     await user.type(screen.getByLabelText('Website URL'), 'https://example.com/');
-    await user.type(screen.getByLabelText(/Maximum depth/), depth);
+    await user.type(screen.getByRole('spinbutton', { name: /Maximum depth/ }), depth);
     await user.click(screen.getByRole('button', { name: 'Create request' }));
-    expect(screen.getByLabelText(/Maximum depth/)).toBeInvalid();
+    expect(screen.getByRole('spinbutton', { name: /Maximum depth/ })).toBeInvalid();
     expect(fetcher.mock.calls.some(([, options]) => options?.method === 'POST')).toBe(false);
   });
 

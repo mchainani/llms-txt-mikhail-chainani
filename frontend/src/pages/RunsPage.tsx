@@ -5,6 +5,7 @@ import type { RequestInfo, RunInfo } from '../api';
 import { Breadcrumbs, ErrorNotice, Loading, Status, Timestamp } from '../components';
 import { useResource } from '../useResource';
 import { DeleteButton } from '../DeleteButton';
+import { RequestOptions } from '../RequestOptions';
 
 const hasPendingRuns = (runs: RunInfo[]) => runs.some((run) => run.status === 'pending');
 
@@ -33,7 +34,7 @@ export function RunsPage() {
     {startError && <ErrorNotice message={startError} />}
     {request.error && <ErrorNotice message={request.error} retry={request.reload} />}
     {request.loading && !request.data && <Loading label="Loading request…" />}
-    {request.data && <section className="panel request-summary"><div><span className="eyebrow">WEBSITE</span><p className="summary-url">{request.data.url}</p><span className="identifier mono">{request.data.id}</span></div><div><span className="eyebrow">SCHEDULE</span><p>{request.data.cron_expression ? <code>{request.data.cron_expression}</code> : 'One-time request'}</p>{request.data.cron_expression && <span className="muted">Timezone: UTC</span>}</div><div><span className="eyebrow">CREATED</span><p><Timestamp value={request.data.created_at} /></p></div></section>}
+    {request.data && <section className="panel request-summary"><div><span className="eyebrow">WEBSITE</span><p className="summary-url">{request.data.url}</p><span className="identifier mono">{request.data.id}</span></div><div><span className="eyebrow">SCHEDULE</span><p>{request.data.cron_expression ? <code>{request.data.cron_expression}</code> : 'One-time request'}</p>{request.data.cron_expression && <span className="muted">Timezone: UTC</span>}</div><div><span className="eyebrow">CREATED</span><p><Timestamp value={request.data.created_at} /></p></div><div className="summary-options"><h2 className="eyebrow">REQUEST OPTIONS</h2><RequestOptions configs={request.data.configs} /></div></section>}
     <section className="panel" aria-labelledby="runs-heading"><div className="list-heading"><div className="heading-with-count"><h2 id="runs-heading">Runs</h2>{runs.data && <span className="count">{runs.data.length}</span>}</div><button className="button secondary small" onClick={runs.reload} disabled={runs.loading}>↻ Refresh</button></div>
       {runs.data && hasPendingRuns(runs.data) && <p className="polling-note"><span className="pulse-dot" aria-hidden="true" />Pending runs refresh every 5 seconds.</p>}
       {runs.error && <ErrorNotice message={runs.error} retry={runs.reload} />}
