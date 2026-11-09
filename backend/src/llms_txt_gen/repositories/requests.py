@@ -24,7 +24,7 @@ class RequestRepository(Repository[Request]):
         from llms_txt_gen.jobs import cancel_job
 
         async with self._operation():
-            request = await self._read(entity_id, for_update=True)
+            request = await self._read(entity_id, mode="exclusive")
             if request.job_id is not None:
                 await cancel_job(self.connection, request.job_id)
             runs = RunRepository(self.connection)

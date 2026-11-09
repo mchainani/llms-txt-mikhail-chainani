@@ -3,7 +3,7 @@
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from inspect import isawaitable
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 from uuid import UUID
 
 import psycopg
@@ -11,6 +11,15 @@ from psycopg import sql
 from psycopg.rows import dict_row
 
 from llms_txt_gen.repositories.errors import NoDataFound, translate_database_error
+
+type ReadMode = Literal["exclusive", "key_share", "share"] | None
+
+_READ_LOCK_CLAUSES: dict[ReadMode, str] = {
+    "exclusive": " FOR UPDATE",
+    "key_share": " FOR KEY SHARE",
+    "share": " FOR SHARE",
+    None: "",
+}
 
 
 class Repository[T]:
@@ -61,11 +70,21 @@ class Repository[T]:
         async with self._operation():
             return await self._fetch_one(query, tuple(values.values()))
 
-    async def _read(self, entity_id: UUID, *, for_update: bool = False) -> T:
+    async def _read(self, entity_id: UUID, *, mode: ReadMode = None) -> T:
+        """Read within the caller's transaction, holding any row lock until it ends.
+
+        exclusive blocks writers and other locking reads; key_share blocks key
+        updates and deletion; share blocks all updates and deletion. None takes
+        no row lock. Ordinary, unlocked reads are compatible with every mode.
+        """
+        try:
+            lock_clause = _READ_LOCK_CLAUSES[mode]
+        except KeyError as error:
+            raise ValueError(f"Unknown read lock mode: {mode!r}") from error
         query = sql.SQL("SELECT {} FROM {} WHERE id = %s{}").format(
             self._columns_sql,
             sql.Identifier(self.table),
-            sql.SQL(" FOR UPDATE" if for_update else ""),
+            sql.SQL(lock_clause),
         )
         return await self._fetch_one(query, (entity_id,))
 
@@ -107,7 +126,7 @@ class Repository[T]:
         if not self.mutable_columns:
             raise ValueError(f"{self.entity_type.__name__} cannot be modified")
         async with self._operation():
-            current = await self._read(entity_id, for_update=True)
+            current = await self._read(entity_id, mode="exclusive")
             modified = modifier(current)
             if isawaitable(modified):
                 modified = await modified

@@ -1,5 +1,7 @@
 """Persistence for llms.txt generation runs."""
 
+from collections.abc import Awaitable, Callable
+from inspect import isawaitable
 from uuid import UUID, uuid4
 
 from psycopg import sql
@@ -32,7 +34,7 @@ class RunRepository(Repository[Run]):
         from llms_txt_gen.jobs import cancel_job
 
         async with self._operation():
-            run = await self._read(entity_id, for_update=True)
+            run = await self._read(entity_id, mode="exclusive")
             if run.job_id is not None:
                 await cancel_job(self.connection, run.job_id)
             if run.file_id is not None:
@@ -56,8 +58,10 @@ class RunRepository(Repository[Run]):
 
         run_id = id if id is not None else uuid4()
         async with self._operation():
-            # Serialize with request deletion before creating a child or its job.
-            await RequestRepository(self.connection)._read(request_id, for_update=True)
+            # Protect references from deletion/key changes while allowing other creators.
+            await RequestRepository(self.connection)._read(request_id, mode="key_share")
+            if file_id is not None:
+                await FileRepository(self.connection)._read(file_id, mode="key_share")
             job_id = await process_run.configure(
                 connection=self.connection, lock=f"llms-txt-run:{run_id}"
             ).defer_async(run_id=str(run_id))
@@ -72,6 +76,20 @@ class RunRepository(Repository[Run]):
                     "retry_count": retry_count,
                 }
             )
+
+    async def modify(self, entity_id: UUID, modifier: Callable[[Run], Run | Awaitable[Run]]) -> Run:
+        """Apply a locked update, validating its file reference before writing."""
+
+        async def modify_and_validate(current: Run) -> Run:
+            modified = modifier(current)
+            if isawaitable(modified):
+                modified = await modified
+            self._validate_modification(current, modified)
+            if modified != current and modified.file_id is not None:
+                await FileRepository(self.connection)._read(modified.file_id, mode="key_share")
+            return modified
+
+        return await super().modify(entity_id, modify_and_validate)
 
     async def list_by_request_id(self, request_id: UUID, *, limit: int | None = None) -> list[Run]:
         """Return a request's runs in the request/created-at index order."""

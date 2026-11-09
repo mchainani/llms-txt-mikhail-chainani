@@ -146,6 +146,145 @@ def test_create_run_enqueues_job_and_saves_job_id(run_database, request_id):
 
 
 @pytest.mark.parametrize(
+    ("mode", "blocked_operations"),
+    [
+        ("exclusive", {"update", "key_update", "delete", "share"}),
+        ("key_share", {"key_update", "delete"}),
+        ("share", {"update", "key_update", "delete"}),
+        (None, set()),
+    ],
+)
+@pytest.mark.parametrize("operation", ["update", "key_update", "delete", "share"])
+def test_read_lock_modes_control_concurrent_operations(
+    run_database, mode, blocked_operations, operation
+):
+    queries = {
+        "update": "UPDATE llms_txt_files SET content = 'changed' WHERE id = %s",
+        "key_update": "UPDATE llms_txt_files SET id = gen_random_uuid() WHERE id = %s",
+        "delete": "DELETE FROM llms_txt_files WHERE id = %s",
+        "share": "SELECT id FROM llms_txt_files WHERE id = %s FOR SHARE",
+    }
+
+    async def scenario():
+        async with database_connection() as holding, database_connection() as competing:
+            file = await FileRepository(holding).create(type="text/plain", content="original")
+            async with holding.transaction():
+                assert await FileRepository(holding)._read(file.id, mode=mode) == file
+                async with competing.transaction():
+                    await competing.execute("SET LOCAL lock_timeout = '100ms'")
+                    if operation in blocked_operations:
+                        with pytest.raises(psycopg.errors.LockNotAvailable):
+                            async with competing.transaction():
+                                await competing.execute(queries[operation], (file.id,))
+                    else:
+                        await competing.execute(queries[operation], (file.id,))
+
+    anyio.run(scenario)
+
+
+def test_read_rejects_unknown_lock_mode(run_database):
+    async def scenario():
+        async with database_connection() as connection:
+            file = await FileRepository(connection).create(type="text/plain", content="text")
+            with pytest.raises(ValueError, match="mode"):
+                await FileRepository(connection)._read(file.id, mode="invalid")
+
+    anyio.run(scenario)
+
+
+@pytest.mark.parametrize("reference", ["request", "file"])
+def test_create_run_rejects_missing_references_without_writes(run_database, request_id, reference):
+    missing_id = uuid4()
+
+    async def scenario():
+        async with database_connection() as connection:
+            async with connection.transaction():
+                with pytest.raises(NoDataFound) as error:
+                    await RunRepository(connection).create(
+                        request_id=missing_id if reference == "request" else request_id,
+                        file_id=missing_id if reference == "file" else None,
+                    )
+                assert error.value.entity_id == missing_id
+                assert error.value.entity == ("Request" if reference == "request" else "File")
+                assert await RunRepository(connection).list() == []
+                cursor = await connection.execute("SELECT id FROM procrastinate_jobs")
+                assert await cursor.fetchall() == []
+
+    anyio.run(scenario)
+
+
+def test_create_runs_for_same_request_can_commit_concurrently(run_database, request_id):
+    async def scenario():
+        async with database_connection() as first, database_connection() as second:
+            async with first.transaction():
+                first_run = await RunRepository(first).create(request_id=request_id)
+                async with second.transaction():
+                    await second.execute("SET LOCAL lock_timeout = '500ms'")
+                    second_run = await RunRepository(second).create(request_id=request_id)
+                assert first_run.id != second_run.id
+            assert len(await RunRepository(first).list_by_request_id(request_id)) == 2
+
+    anyio.run(scenario)
+
+
+@pytest.mark.parametrize("operation", ["create", "modify"])
+def test_run_file_reference_is_key_share_locked_until_commit(run_database, request_id, operation):
+    async def scenario():
+        async with database_connection() as linking, database_connection() as competing:
+            files, runs = FileRepository(linking), RunRepository(linking)
+            file = await files.create(type="text/plain", content="original")
+            run = await runs.create(request_id=request_id) if operation == "modify" else None
+            async with linking.transaction():
+                if operation == "create":
+                    linked = await runs.create(request_id=request_id, file_id=file.id)
+                else:
+                    linked = await runs.modify(
+                        run.id, lambda current: replace(current, file_id=file.id)
+                    )
+                assert linked.file_id == file.id
+                async with competing.transaction():
+                    await competing.execute("SET LOCAL lock_timeout = '100ms'")
+                    await competing.execute(
+                        "UPDATE llms_txt_files SET content = 'updated' WHERE id = %s", (file.id,)
+                    )
+                    with pytest.raises(psycopg.errors.LockNotAvailable):
+                        async with competing.transaction():
+                            await competing.execute(
+                                "DELETE FROM llms_txt_files WHERE id = %s", (file.id,)
+                            )
+            assert (await runs.read(linked.id)).file_id == file.id
+            assert (await files.read(file.id)).content == "updated"
+
+    anyio.run(scenario)
+
+
+@pytest.mark.parametrize("async_modifier", [False, True])
+def test_modify_run_rejects_missing_file_and_rolls_back_callback_writes(
+    run_database, request_id, async_modifier
+):
+    async def scenario():
+        async with database_connection() as connection:
+            runs, files = RunRepository(connection), FileRepository(connection)
+            run = await runs.create(request_id=request_id)
+            missing_id = uuid4()
+
+            def modify(current):
+                return replace(current, file_id=missing_id, status="success")
+
+            async def modify_async(current):
+                await files.create(type="text/plain", content="must roll back")
+                return modify(current)
+
+            with pytest.raises(NoDataFound) as error:
+                await runs.modify(run.id, modify_async if async_modifier else modify)
+            assert error.value.entity_id == missing_id
+            assert await runs.read(run.id) == run
+            assert await files.list() == []
+
+    anyio.run(scenario)
+
+
+@pytest.mark.parametrize(
     ("table", "check", "error_type"),
     [
         ("llms_txt_runs", "job_id IS NULL", CheckConstraintViolation),
