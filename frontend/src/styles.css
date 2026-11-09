@@ -94,6 +94,14 @@ tbody tr:hover { background: #fcfefc; }
 .request-summary p { font-size: 12px; }
 .request-summary .summary-url { font-size: 16px; font-weight: 500; overflow-wrap: anywhere; }
 .request-summary .muted { margin-top: 8px; display: block; }
+.request-options { margin: 0; display: grid; gap: 8px; font-size: 11px; }
+.request-options > div { display: flex; justify-content: space-between; gap: 16px; }
+.request-options dt { color: #607467; white-space: nowrap; }
+.request-options dd { margin: 0; font-weight: 550; white-space: nowrap; }
+.summary-options { grid-column: 1 / -1; padding-top: 20px; border-top: 1px solid #edf1ee; }
+.summary-options .request-options { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 26px; }
+.summary-options .request-options > div { display: block; }
+.summary-options .request-options dd { margin-top: 7px; font-size: 14px; }
 .muted { font-size: 11px; color: #607467; }
 .status { display: inline-flex; align-items: center; gap: 6px; padding: 5px 8px; font-size: 10px; border-radius: 5px; background: #eef3f0; color: #607467; white-space: nowrap; }
 .status > span, .pulse-dot { display: inline-block; height: 5px; width: 5px; border-radius: 50%; background: currentColor; }
@@ -141,6 +149,9 @@ pre code { font-size: inherit; }
   .list-heading { padding: 17px 20px; min-height: 66px; }
   .app-footer { margin: 0 16px; flex-direction: column; gap: 8px; }
   .request-summary { padding: 22px 20px; gap: 24px 16px; }
+  .summary-options .request-options { grid-template-columns: 1fr; gap: 14px; }
+  .summary-options .request-options > div { display: flex; }
+  .summary-options .request-options dd { margin-top: 0; font-size: 12px; }
   .file-meta { flex-wrap: wrap; }
   .file-meta code { font-size: 9px; }
   .file-details { flex-direction: column; gap: 8px; padding: 12px 20px; }
